@@ -15,12 +15,12 @@ from pathlib import Path
 # HARDCODED DEFAULT PATHS (edit these once for smoother Colab usage)
 # Priority order remains: CLI args > env vars > hardcoded defaults.
 # ---------------------------------------------------------------------------
-HARDCODED_INPUT_FOLDER = "/content/drive/MyDrive/transformation-rate/input"
-HARDCODED_ARCHIVE_FOLDER = "/content/drive/MyDrive/transformation-rate/archive"
-HARDCODED_CLIENTS_FILE = "/content/drive/MyDrive/transformation-rate/clients.txt"
-HARDCODED_COUNTRY_CODES_FILE = "/content/drive/MyDrive/transformation-rate/dhl_country_codes.txt"
-HARDCODED_ACCESSORIAL_FILE = "/content/drive/MyDrive/transformation-rate/Accessorial Costs.xlsx"
-HARDCODED_OUTPUT_DIR = "/content/drive/MyDrive/transformation-rate/output"
+HARDCODED_INPUT_FOLDER = "/content/drive/MyDrive/RMT test/Output"
+HARDCODED_ARCHIVE_FOLDER = "/content/drive/MyDrive/RMT/archive"
+HARDCODED_CLIENTS_FILE = "/content/drive/MyDrive/RMT/additional info/clients.txt"
+HARDCODED_COUNTRY_CODES_FILE = "/content/drive/MyDrive/RMT/additional info/dhl_country_codes.txt"
+HARDCODED_ACCESSORIAL_FILE = "/content/drive/MyDrive/RMT/additional info/Accessorial Costs.xlsx"
+HARDCODED_OUTPUT_DIR = "/content/drive/MyDrive/RMT/output"
 
 
 def _detect_project_root():
@@ -348,3 +348,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
