@@ -462,8 +462,10 @@ def _load_country_codes(codes_path=None):
         codes_path = base / "input" / "dhl_country_codes.txt"
         if not codes_path.exists():
             codes_path = base / "addition" / "dhl_country_codes.txt"
+    print(f"[*] CountryCode Debug: trying codes file: {codes_path}")
     codes_path = Path(codes_path)
     if not codes_path.exists():
+        print(f"[WARN] CountryCode Debug: codes file not found: {codes_path}")
         return {}
     name_to_code = {}
     for line in codes_path.read_text(encoding="utf-8").splitlines():
@@ -477,6 +479,10 @@ def _load_country_codes(codes_path=None):
             code = code.split(",")[0].strip()
         if name:
             name_to_code[name] = code
+    print(f"[OK] CountryCode Debug: loaded mappings: {len(name_to_code)}")
+    if name_to_code:
+        sample_items = list(name_to_code.items())[:5]
+        print(f"[*] CountryCode Debug: sample mappings: {sample_items}")
     return name_to_code
 
 
@@ -493,6 +499,13 @@ def _country_to_code(country, name_to_code):
     s = str(country).strip()
     if not s:
         return ''
+    # Handle values like "Afghanistan (AF)" -> name: "Afghanistan", code: "AF"
+    # If embedded code exists, keep it as fallback.
+    paren_code = ''
+    m = re.match(r'^(.*?)\s*\(([A-Za-z]{2,3})\)\s*$', s)
+    if m:
+        s = m.group(1).strip()
+        paren_code = m.group(2).upper()
     # Exact and uppercase
     code = name_to_code.get(s)
     if code is not None:
@@ -523,14 +536,29 @@ def _country_to_code(country, name_to_code):
         code = name_to_code.get(v.upper())
         if code is not None:
             return code
+    if paren_code:
+        return paren_code
     return ''
 
 
 def _fill_country_zoning_country_codes(rows, name_to_code):
     """Add Country Code column to CountryZoning rows from Country column."""
+    matched = 0
+    missing = 0
+    missing_countries = []
     for row in rows:
         country = row.get('Country') or ''
-        row['Country Code'] = _country_to_code(country, name_to_code)
+        code = _country_to_code(country, name_to_code)
+        row['Country Code'] = code
+        if country and code:
+            matched += 1
+        elif country and not code:
+            missing += 1
+            if len(missing_countries) < 20:
+                missing_countries.append(str(country))
+    print(f"[*] CountryCode Debug: rows with country matched={matched}, missing={missing}")
+    if missing_countries:
+        print(f"[WARN] CountryCode Debug: sample missing countries: {missing_countries}")
 
 
 def flatten_array_data(array_data, metadata, field_name):
