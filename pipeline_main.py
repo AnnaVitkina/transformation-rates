@@ -57,6 +57,16 @@ def parse_args():
         help="Input Azure DI JSON path (can be on Google Drive).",
     )
     parser.add_argument(
+        "--input-folder",
+        default=None,
+        help="Folder containing JSON files. Script will list them and ask you to choose one.",
+    )
+    parser.add_argument(
+        "--archive-folder",
+        default=None,
+        help="Archive folder path for processed input JSON. Default: <input-folder>/archive",
+    )
+    parser.add_argument(
         "--clients-file",
         default=None,
         help="Clients file path (one client per line).",
@@ -81,7 +91,36 @@ def parse_args():
     return args
 
 
-def resolve_input_file(input_arg):
+def _list_json_files(folder_path):
+    folder = Path(folder_path)
+    if not folder.exists() or not folder.is_dir():
+        raise FileNotFoundError(f"Input folder not found: {folder}")
+    files = sorted(folder.glob("*.json"), key=lambda p: p.name.lower())
+    if not files:
+        raise FileNotFoundError(f"No .json files found in: {folder}")
+    return files
+
+
+def _choose_json_from_folder(folder_path):
+    files = _list_json_files(folder_path)
+    print("Select input JSON file:")
+    print()
+    for i, p in enumerate(files, 1):
+        size_mb = p.stat().st_size / (1024 * 1024)
+        print(f"  {i}. {p.name}  ({size_mb:.2f} MB)")
+    print()
+    while True:
+        choice = input(f"Enter number (1-{len(files)}): ").strip()
+        try:
+            n = int(choice)
+            if 1 <= n <= len(files):
+                return files[n - 1]
+        except ValueError:
+            pass
+        print("Invalid choice. Enter a number from the list.")
+
+
+def resolve_input_file(input_arg, input_folder_arg=None):
     """
     Resolve input file:
     - If not provided: interactive selection from input/
@@ -89,14 +128,54 @@ def resolve_input_file(input_arg):
     - Else: use as provided
     """
     if input_arg is None:
+        env_input_folder = os.environ.get("INPUT_FOLDER")
+        folder = input_folder_arg or env_input_folder
+        if folder:
+            selected = _choose_json_from_folder(folder)
+            return str(selected), str(Path(folder))
         env_input = os.environ.get("INPUT_FILE")
         if env_input:
-            return env_input
-        return extractor.choose_input_file_interactive()
+            return env_input, None
+        return extractor.choose_input_file_interactive(), None
     p = Path(input_arg)
     if not p.is_absolute() and len(p.parts) == 1:
-        return str(extractor.INPUT_DIR / p)
-    return str(p)
+        return str(extractor.INPUT_DIR / p), None
+    return str(p), None
+
+
+def _archive_processed_input(input_file, input_folder=None, archive_folder=None):
+    """
+    Move processed input file to archive.
+    - If archive_folder provided, use it.
+    - Else if input_folder provided, use <input_folder>/archive.
+    - Else: do nothing.
+    """
+    if archive_folder is None:
+        archive_folder = os.environ.get("ARCHIVE_FOLDER")
+    if archive_folder is None and input_folder:
+        archive_folder = str(Path(input_folder) / "archive")
+    if not archive_folder:
+        return None
+
+    src = Path(input_file)
+    if not src.exists():
+        return None
+
+    archive_dir = Path(archive_folder)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    dst = archive_dir / src.name
+    if dst.exists():
+        stem = src.stem
+        suffix = src.suffix
+        i = 1
+        while True:
+            candidate = archive_dir / f"{stem}_{i}{suffix}"
+            if not candidate.exists():
+                dst = candidate
+                break
+            i += 1
+    shutil.move(str(src), str(dst))
+    return str(dst)
 
 
 def _prepare_reference_files(country_codes_file, accessorial_file):
@@ -136,7 +215,15 @@ def _prepare_reference_files(country_codes_file, accessorial_file):
         print(f"[OK] Accessorial reference staged: {dst}")
 
 
-def run_pipeline(input_file, clients_file=None, country_codes_file=None, accessorial_file=None, output_dir=None):
+def run_pipeline(
+    input_file,
+    clients_file=None,
+    country_codes_file=None,
+    accessorial_file=None,
+    output_dir=None,
+    input_folder=None,
+    archive_folder=None,
+):
     if clients_file is None:
         clients_file = os.environ.get("CLIENTS_FILE")
     if country_codes_file is None:
@@ -162,6 +249,10 @@ def run_pipeline(input_file, clients_file=None, country_codes_file=None, accesso
     print(f"[*] Input: {input_file}")
     print(f"[*] Clients file: {clients_path}")
     print(f"[*] Output directory: {output_root}")
+    if input_folder:
+        print(f"[*] Input folder: {input_folder}")
+    if archive_folder:
+        print(f"[*] Archive folder: {archive_folder}")
     print()
 
     _prepare_reference_files(country_codes_file, accessorial_file)
@@ -210,18 +301,27 @@ def run_pipeline(input_file, clients_file=None, country_codes_file=None, accesso
     print(f"Extracted JSON: {extracted_json_path}")
     print(f"Excel: {output_xlsx_path}")
     print(f"TXT: {output_txt_path}")
+    archived_to = _archive_processed_input(
+        input_file=input_file,
+        input_folder=input_folder,
+        archive_folder=archive_folder,
+    )
+    if archived_to:
+        print(f"Archived input JSON: {archived_to}")
     print()
 
 
 def main():
     args = parse_args()
-    input_file = resolve_input_file(args.input_file)
+    input_file, selected_folder = resolve_input_file(args.input_file, args.input_folder)
     run_pipeline(
         input_file=input_file,
         clients_file=args.clients_file,
         country_codes_file=args.country_codes_file,
         accessorial_file=args.accessorial_file,
         output_dir=args.output_dir,
+        input_folder=selected_folder or args.input_folder,
+        archive_folder=args.archive_folder,
     )
 
 
