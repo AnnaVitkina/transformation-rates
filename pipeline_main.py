@@ -5,6 +5,8 @@ Designed to run locally and in Google Colab (including exec(open(...).read())).
 """
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -15,12 +17,12 @@ from pathlib import Path
 # HARDCODED DEFAULT PATHS (edit these once for smoother Colab usage)
 # Priority order remains: CLI args > env vars > hardcoded defaults.
 # ---------------------------------------------------------------------------
-HARDCODED_INPUT_FOLDER = "/content/drive/MyDrive/RMT test/Output"
-HARDCODED_ARCHIVE_FOLDER = "/content/drive/MyDrive/RMT/archive"
-HARDCODED_CLIENTS_FILE = "/content/drive/MyDrive/RMT/additional info/clients.txt"
-HARDCODED_COUNTRY_CODES_FILE = "/content/drive/MyDrive/RMT/additional info/dhl_country_codes.txt"
-HARDCODED_ACCESSORIAL_FILE = "/content/drive/MyDrive/RMT/additional info/Accessorial Costs.xlsx"
-HARDCODED_OUTPUT_DIR = "/content/drive/MyDrive/RMT/output"
+HARDCODED_INPUT_FOLDER = "/content/drive/MyDrive/transformation-rate/input"
+HARDCODED_ARCHIVE_FOLDER = "/content/drive/MyDrive/transformation-rate/archive"
+HARDCODED_CLIENTS_FILE = "/content/drive/MyDrive/transformation-rate/clients.txt"
+HARDCODED_COUNTRY_CODES_FILE = "/content/drive/MyDrive/transformation-rate/dhl_country_codes.txt"
+HARDCODED_ACCESSORIAL_FILE = "/content/drive/MyDrive/transformation-rate/Accessorial Costs.xlsx"
+HARDCODED_OUTPUT_DIR = "/content/drive/MyDrive/transformation-rate/output"
 
 
 def _detect_project_root():
@@ -96,6 +98,11 @@ def parse_args():
         "--output-dir",
         default=None,
         help="Directory to write outputs (xlsx/txt/extracted json).",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show full debug output from underlying modules.",
     )
     # parse_known_args avoids failures in Colab where extra argv flags are present
     args, _unknown = parser.parse_known_args()
@@ -236,6 +243,7 @@ def run_pipeline(
     output_dir=None,
     input_folder=None,
     archive_folder=None,
+    verbose=False,
 ):
     if clients_file is None:
         clients_file = os.environ.get("CLIENTS_FILE")
@@ -278,18 +286,47 @@ def run_pipeline(
 
     _prepare_reference_files(country_codes_file, accessorial_file)
 
+    def _run_quiet(label, fn, *args, **kwargs):
+        """Run function with captured stdout/stderr unless verbose=True."""
+        if verbose:
+            return fn(*args, **kwargs)
+        out_buf = io.StringIO()
+        err_buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out_buf), contextlib.redirect_stderr(err_buf):
+                return fn(*args, **kwargs)
+        except Exception:
+            print(f"[ERROR] {label} failed.")
+            captured = out_buf.getvalue().strip()
+            captured_err = err_buf.getvalue().strip()
+            if captured:
+                print("---- Captured stdout (last lines) ----")
+                print("\n".join(captured.splitlines()[-20:]))
+            if captured_err:
+                print("---- Captured stderr (last lines) ----")
+                print("\n".join(captured_err.splitlines()[-20:]))
+            raise
+
     # Step 1: Read clients and input JSON
     print("Step 1: Reading clients and input JSON...")
-    client_list = extractor.read_client_list(str(clients_path))
-    input_data = extractor.read_converted_json(input_file)
+    client_list = _run_quiet("Read client list", extractor.read_client_list, str(clients_path))
+    input_data = _run_quiet("Read input JSON", extractor.read_converted_json, input_file)
+    print(f"[OK] Client names loaded: {len(client_list)}")
     print()
 
     # Step 2: Extract + transform + save extracted JSON
     print("Step 2: Extracting and transforming data...")
-    client_name = extractor.detect_client_from_json(input_data, client_list)
-    fields = extractor.extract_fields(input_data)
-    processed_data = extractor.transform_data(fields, client_name)
-    extractor.save_output(processed_data, str(extracted_json_path))
+    client_name = _run_quiet("Detect client", extractor.detect_client_from_json, input_data, client_list)
+    fields = _run_quiet("Extract fields", extractor.extract_fields, input_data)
+    processed_data = _run_quiet("Transform data", extractor.transform_data, fields, client_name)
+    _run_quiet("Save extracted JSON", extractor.save_output, processed_data, str(extracted_json_path))
+    stats = processed_data.get("statistics", {})
+    print(f"[OK] Client detected: {client_name}")
+    print(
+        f"[OK] Extracted rows: MainCosts={stats.get('MainCosts_rows', 0)}, "
+        f"AddedRates={stats.get('AddedRates_rows', 0)}, "
+        f"CountryZoning={stats.get('CountryZoning_rows', 0)}"
+    )
     print()
 
     # Step 3: Fill null service types and persist
@@ -303,12 +340,15 @@ def run_pipeline(
     # Step 4: Build Excel from extracted JSON object
     print("Step 4: Creating Excel workbook...")
     output_xlsx_path.parent.mkdir(parents=True, exist_ok=True)
-    create_table.save_to_excel(processed_data, str(output_xlsx_path))
+    _run_quiet("Create Excel", create_table.save_to_excel, processed_data, str(output_xlsx_path))
+    print(f"[OK] Excel created: {output_xlsx_path}")
     print()
 
     # Step 5: Build CountryZoning TXT from generated Excel
     print("Step 5: Creating CountryZoning TXT...")
-    txt_out = create_country_region_txt(
+    txt_out = _run_quiet(
+        "Create CountryZoning TXT",
+        create_country_region_txt,
         excel_path=str(output_xlsx_path),
         output_path=str(output_txt_path),
     )
@@ -330,6 +370,15 @@ def run_pipeline(
     if archived_to:
         print(f"Archived input JSON: {archived_to}")
     print()
+    print("Overall:")
+    print(f"- Input processed: {input_file}")
+    print(f"- Client: {client_name}")
+    print(f"- JSON output: {extracted_json_path}")
+    print(f"- Excel output: {output_xlsx_path}")
+    print(f"- TXT output: {output_txt_path}")
+    if archived_to:
+        print(f"- Archived input: {archived_to}")
+    print()
 
 
 def main():
@@ -343,9 +392,9 @@ def main():
         output_dir=args.output_dir,
         input_folder=selected_folder or args.input_folder,
         archive_folder=args.archive_folder,
+        verbose=args.verbose,
     )
 
 
 if __name__ == "__main__":
     main()
-
