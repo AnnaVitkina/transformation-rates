@@ -11,6 +11,17 @@ import shutil
 import sys
 from pathlib import Path
 
+# ---------------------------------------------------------------------------
+# HARDCODED DEFAULT PATHS (edit these once for smoother Colab usage)
+# Priority order remains: CLI args > env vars > hardcoded defaults.
+# ---------------------------------------------------------------------------
+HARDCODED_INPUT_FOLDER = "/content/drive/MyDrive/transformation-rate/input"
+HARDCODED_ARCHIVE_FOLDER = "/content/drive/MyDrive/transformation-rate/archive"
+HARDCODED_CLIENTS_FILE = "/content/drive/MyDrive/transformation-rate/clients.txt"
+HARDCODED_COUNTRY_CODES_FILE = "/content/drive/MyDrive/transformation-rate/dhl_country_codes.txt"
+HARDCODED_ACCESSORIAL_FILE = "/content/drive/MyDrive/transformation-rate/Accessorial Costs.xlsx"
+HARDCODED_OUTPUT_DIR = "/content/drive/MyDrive/transformation-rate/output"
+
 
 def _detect_project_root():
     """Best-effort project root detection (works in Colab exec and normal runs)."""
@@ -129,7 +140,7 @@ def resolve_input_file(input_arg, input_folder_arg=None):
     """
     if input_arg is None:
         env_input_folder = os.environ.get("INPUT_FOLDER")
-        folder = input_folder_arg or env_input_folder
+        folder = input_folder_arg or env_input_folder or HARDCODED_INPUT_FOLDER
         if folder:
             selected = _choose_json_from_folder(folder)
             return str(selected), str(Path(folder))
@@ -152,6 +163,8 @@ def _archive_processed_input(input_file, input_folder=None, archive_folder=None)
     """
     if archive_folder is None:
         archive_folder = os.environ.get("ARCHIVE_FOLDER")
+    if archive_folder is None:
+        archive_folder = HARDCODED_ARCHIVE_FOLDER
     if archive_folder is None and input_folder:
         archive_folder = str(Path(input_folder) / "archive")
     if not archive_folder:
@@ -226,12 +239,20 @@ def run_pipeline(
 ):
     if clients_file is None:
         clients_file = os.environ.get("CLIENTS_FILE")
+    if clients_file is None:
+        clients_file = HARDCODED_CLIENTS_FILE
     if country_codes_file is None:
         country_codes_file = os.environ.get("COUNTRY_CODES_FILE")
+    if country_codes_file is None:
+        country_codes_file = HARDCODED_COUNTRY_CODES_FILE
     if accessorial_file is None:
         accessorial_file = os.environ.get("ACCESSORIAL_FILE")
+    if accessorial_file is None:
+        accessorial_file = HARDCODED_ACCESSORIAL_FILE
     if output_dir is None:
         output_dir = os.environ.get("OUTPUT_DIR")
+    if output_dir is None:
+        output_dir = HARDCODED_OUTPUT_DIR
 
     output_root = Path(output_dir) if output_dir else (PROJECT_ROOT / "output")
     output_root.mkdir(parents=True, exist_ok=True)
