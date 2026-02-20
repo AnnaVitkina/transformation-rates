@@ -22,6 +22,14 @@ def _detect_project_root():
         candidates.append(Path(__file__).resolve().parent)
     candidates.append(Path.cwd())
     candidates.append(Path("/content/transformation-rate"))
+    candidates.append(Path("/content/transformation-rates"))
+
+    # Also scan /content/* for a repo-like folder (Colab-friendly)
+    content_root = Path("/content")
+    if content_root.exists():
+        for child in content_root.iterdir():
+            if child.is_dir():
+                candidates.append(child)
 
     for c in candidates:
         if (c / "create_table.py").exists() and (c / "main.py").exists():
