@@ -968,7 +968,8 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
     CostCurrency -> Currency; PriceMechanism -> Rate by; ApplyTo -> Apply Over;
     CostCode -> Additional info(Cost Code); Validity Date -> Valid From; Carrier -> Carrier.
     Cost Type is filled by best-matching Original Cost Name against the 'Name' column from
-    addition/Accessorial Costs file if cost_type_ref_path is provided. Apply if, Valid To left empty.
+    an Accessorial Costs file. If cost_type_ref_path is not provided, uses addition/Accessorial Costs <ClientName>.xlsx
+    (e.g. Accessorial Costs Airbus Group.xlsx), else addition/Accessorial Costs.xlsx. Apply if, Valid To left empty.
     """
     carrier = (metadata.get('carrier') or '').replace('\n', ' ')
     validity_date = (metadata.get('validity_date') or '')
@@ -997,11 +998,21 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
 
     if cost_type_ref_path is None:
         base = Path(__file__).resolve().parent
-        for name in ('Accessorial Costs.xlsx', 'Accessorial Costs.csv'):
-            p = base / 'addition' / name
-            if p.exists():
-                cost_type_ref_path = p
-                break
+        addition_dir = base / 'addition'
+        client = (metadata.get('client') or '').strip()
+        ext_order = ('.xlsx', '.xls', '.csv')
+        # Prefer client-specific file: "Accessorial Costs <ClientName>.xlsx" (case-insensitive)
+        if client:
+            target_stem_lower = f"Accessorial Costs {client}".lower()
+            candidates = [p for p in addition_dir.iterdir() if p.is_file() and p.stem.lower() == target_stem_lower and p.suffix.lower() in ext_order]
+            if candidates:
+                cost_type_ref_path = min(candidates, key=lambda p: ext_order.index(p.suffix.lower()) if p.suffix.lower() in ext_order else 99)
+                print(f"[*] Accessorial cost mapping: using client-specific file {cost_type_ref_path.name}")
+        # Fallback to generic Accessorial Costs.xlsx / .csv (case-insensitive)
+        if cost_type_ref_path is None:
+            candidates = [p for p in addition_dir.iterdir() if p.is_file() and p.stem.lower() == "accessorial costs" and p.suffix.lower() in ('.xlsx', '.csv')]
+            if candidates:
+                cost_type_ref_path = min(candidates, key=lambda p: ('.xlsx', '.csv').index(p.suffix.lower()) if p.suffix.lower() in ('.xlsx', '.csv') else 99)
 
     if cost_type_ref_path:
         name_list = _load_accessorial_cost_type_names(cost_type_ref_path)
