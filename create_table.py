@@ -997,6 +997,9 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
         accessorial_dir = Path(accessorial_folder)
         client = (metadata.get('client') or '').strip()
         ext_order = ('.xlsx', '.xls', '.csv')
+        print("[*] Accessorial Cost Type mapping: client from JSON -> look in folder for file whose name contains client (case-insensitive) -> use that file's 'Name' column to fill Cost Type for each row.")
+        print(f"    Folder: {accessorial_dir}")
+        print(f"    Client: {client or '(none)'}")
         if client and accessorial_dir.exists() and accessorial_dir.is_dir():
             client_lower = client.lower()
             candidates = [
@@ -1009,6 +1012,7 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
                     key=lambda p: ext_order.index(p.suffix.lower()) if p.suffix.lower() in ext_order else 99,
                 )
                 print(f"[*] Accessorial cost mapping: using file (client '{client}' in filename) {cost_type_ref_path.name}")
+                print(f"    Using file: {cost_type_ref_path.name}  (path: {cost_type_ref_path})")
             else:
                 print(f"[*] Accessorial cost mapping: no file with client '{client}' in name in {accessorial_dir}")
         elif not client:
@@ -1022,6 +1026,9 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
             for row in rows:
                 original = row.get('Original Cost Name', '')
                 row['Cost Type'] = _best_match_cost_type(original, name_list)
+            print(f"[*] Accessorial Cost Type: filled from {cost_type_ref_path.name} ({len(name_list)} cost types, {len(rows)} rows)")
+        else:
+            print(f"[*] Accessorial Cost Type: file {cost_type_ref_path.name} has no 'Name' column or is empty, Cost Type left blank")
 
     return rows, cost_type_ref_path
 
