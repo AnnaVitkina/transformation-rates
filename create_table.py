@@ -1013,6 +1013,7 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
             candidates = [p for p in addition_dir.iterdir() if p.is_file() and p.stem.lower() == "accessorial costs" and p.suffix.lower() in ('.xlsx', '.csv')]
             if candidates:
                 cost_type_ref_path = min(candidates, key=lambda p: ('.xlsx', '.csv').index(p.suffix.lower()) if p.suffix.lower() in ('.xlsx', '.csv') else 99)
+                print(f"[*] Accessorial cost mapping: using generic file {cost_type_ref_path.name} (no client-specific file for '{client or '(no client)'}')")
 
     if cost_type_ref_path:
         name_list = _load_accessorial_cost_type_names(cost_type_ref_path)
