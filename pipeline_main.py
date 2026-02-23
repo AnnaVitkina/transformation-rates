@@ -116,7 +116,7 @@ def parse_args():
     parser.add_argument(
         "--country-codes-file",
         default=None,
-        help="Country codes file path (.docx with table: country name, code).",
+        help="Country codes file path (Country<TAB>Code).",
     )
     parser.add_argument(
         "--accessorial-file",
@@ -233,19 +233,19 @@ def _prepare_reference_files(country_codes_file, accessorial_file):
     Use reference files in place. create_table reads country codes from input/ or addition/,
     and Accessorial from addition/. Copy only when the file is outside those locations (e.g. Drive root).
     """
-    # Country codes: create_table looks at input/dhl_country_codes.docx then addition/dhl_country_codes.docx
+    # Country codes: create_table looks at input/dhl_country_codes.txt then addition/dhl_country_codes.txt
     if country_codes_file:
         src = Path(country_codes_file)
         if not src.exists():
             raise FileNotFoundError(f"Country codes file not found: {src}")
-        in_input = (PROJECT_ROOT / "input" / "dhl_country_codes.docx").resolve() == src.resolve()
-        in_addition = (PROJECT_ROOT / "addition" / "dhl_country_codes.docx").resolve() == src.resolve()
+        in_input = (PROJECT_ROOT / "input" / "dhl_country_codes.txt").resolve() == src.resolve()
+        in_addition = (PROJECT_ROOT / "addition" / "dhl_country_codes.txt").resolve() == src.resolve()
         if in_input or in_addition:
             print(f"[OK] Country codes used in place: {src}")
         else:
             dst_dir = PROJECT_ROOT / "input"
             dst_dir.mkdir(parents=True, exist_ok=True)
-            dst = dst_dir / "dhl_country_codes.docx"
+            dst = dst_dir / "dhl_country_codes.txt"
             shutil.copy2(src, dst)
             print(f"[OK] Country codes staged: {dst}")
 
@@ -472,6 +472,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
