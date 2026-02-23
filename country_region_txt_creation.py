@@ -23,6 +23,8 @@ def create_country_region_txt(
         raise ImportError("openpyxl is required. Install with: pip install openpyxl")
 
     excel_path = Path(excel_path)
+    print(f"[*] TXT Debug: excel_path={excel_path}")
+    print(f"[*] TXT Debug: sheet_name={sheet_name}")
     if not excel_path.exists():
         raise FileNotFoundError(f"Excel file not found: {excel_path}")
 
@@ -36,14 +38,17 @@ def create_country_region_txt(
     if sheet_name not in wb.sheetnames:
         wb.close()
         raise ValueError(f"Sheet '{sheet_name}' not found in {excel_path}")
+    print(f"[*] TXT Debug: workbook sheets={wb.sheetnames}")
 
     ws = wb[sheet_name]
     rows = list(ws.iter_rows(values_only=True))
     wb.close()
+    print(f"[*] TXT Debug: total rows read (including header)={len(rows)}")
 
     if not rows:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text("", encoding="utf-8")
+        print("[WARN] TXT Debug: sheet is empty, wrote empty txt")
         return str(output_path)
 
     # First row = headers; find column indices for RateName and Country
@@ -55,34 +60,49 @@ def create_country_region_txt(
             rate_name_col = i
         if h == "Country Code":
             country_col = i
+    print(f"[*] TXT Debug: headers={headers}")
+    print(f"[*] TXT Debug: RateName col index={rate_name_col}, Country Code col index={country_col}")
     if rate_name_col is None:
         raise ValueError("Column 'RateName' not found in CountryZoning")
     if country_col is None:
-        raise ValueError("Column 'Country' not found in CountryZoning")
+        raise ValueError("Column 'Country Code' not found in CountryZoning")
 
     # Group countries by RateName. Forward-fill RateName (empty cells = same as previous row).
     by_rate_name = defaultdict(list)
     current_rate = ""
+    processed_rows = 0
+    skipped_empty_country = 0
     for row in rows[1:]:
         rn = row[rate_name_col] if rate_name_col < len(row) else None
         country = row[country_col] if country_col < len(row) else None
         if rn is not None and str(rn).strip():
             current_rate = str(rn).strip()
         if country is None or (isinstance(country, str) and not str(country).strip()):
+            skipped_empty_country += 1
             continue
         country_str = str(country).strip()
         if country_str:
             by_rate_name[current_rate].append(country_str)
+            processed_rows += 1
+    print(f"[*] TXT Debug: processed country rows={processed_rows}")
+    print(f"[*] TXT Debug: skipped rows with empty Country Code={skipped_empty_country}")
+    print(f"[*] TXT Debug: distinct RateName groups={len(by_rate_name)}")
 
     # Write TXT: "RateName - country1, country2, ..."
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lines = []
     for rate_name in sorted(by_rate_name.keys(), key=lambda x: (x == "", x)):
         countries = by_rate_name[rate_name]
-        line = f"{rate_name} - {', '.join(countries)}"
+        line = f"{rate_name}  {', '.join(countries)}"
         lines.append(line)
+    print(f"[*] TXT Debug: output lines={len(lines)}")
+    if lines:
+        print(f"[*] TXT Debug: first line preview={lines[0][:200]}")
+    else:
+        print("[WARN] TXT Debug: no lines generated, output will be empty")
 
     output_path.write_text("\n".join(lines), encoding="utf-8")
+    print(f"[OK] TXT Debug: wrote file {output_path}")
     return str(output_path)
 
 
