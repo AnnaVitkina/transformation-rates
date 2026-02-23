@@ -17,7 +17,7 @@ from pathlib import Path
 # HARDCODED DEFAULT PATHS (edit these once for smoother Colab usage)
 # Priority order remains: CLI args > env vars > hardcoded defaults.
 # ---------------------------------------------------------------------------
-HARDCODED_INPUT_FOLDER = "/content/drive/Shared with me/RMT test/Output"
+HARDCODED_INPUT_FOLDER = "/content/drive/MyDrive/RMT test/Output"
 HARDCODED_ARCHIVE_FOLDER = "/content/drive/MyDrive/RMT/archive"
 HARDCODED_CLIENTS_FILE = "/content/drive/MyDrive/RMT/addition/clients.txt"
 HARDCODED_COUNTRY_CODES_FILE = "/content/drive/MyDrive/RMT/addition/dhl_country_codes.txt"
@@ -472,6 +472,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
