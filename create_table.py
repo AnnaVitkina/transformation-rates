@@ -41,6 +41,7 @@ def create_metadata_sheet(workbook, metadata):
         ["Client", metadata.get('client', '')],
         ["Carrier", metadata.get('carrier', '').replace('\n', ' ')],
         ["Validity Date", metadata.get('validity_date', '')],
+        ["FileName", metadata.get('FileName', '')],
         ["Extraction Date", metadata.get('extraction_date', '')],
         ["Extraction Source", metadata.get('extraction_source', '')]
     ]
@@ -454,31 +455,56 @@ def _fill_country_zoning_rate_names(rows):
 
 def _load_country_codes(codes_path=None):
     """
-    Load country name -> code from dhl_country_codes.txt (format: Country\\tCode).
+    Load country name -> code from dhl_country_codes.docx.
+    Expects a Word document with a table: first column = country name, second column = code.
     If code contains a comma, the first code is used. Returns dict.
     """
     if codes_path is None:
         base = Path(__file__).resolve().parent
-        codes_path = base / "input" / "dhl_country_codes.txt"
+        codes_path = base / "input" / "dhl_country_codes.docx"
         if not codes_path.exists():
-            codes_path = base / "addition" / "dhl_country_codes.txt"
+            codes_path = base / "addition" / "dhl_country_codes.docx"
     print(f"[*] CountryCode Debug: trying codes file: {codes_path}")
     codes_path = Path(codes_path)
     if not codes_path.exists():
         print(f"[WARN] CountryCode Debug: codes file not found: {codes_path}")
         return {}
+    suffix = codes_path.suffix.lower()
+    if suffix != ".docx":
+        print(f"[WARN] CountryCode Debug: expected .docx, got {suffix}")
+        return {}
+    try:
+        from docx import Document
+    except ImportError:
+        print("[ERROR] python-docx is required to read country codes. Install with: pip install python-docx")
+        return {}
     name_to_code = {}
-    for line in codes_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or "\t" not in line:
-            continue
-        name, code = line.split("\t", 1)
-        name = name.strip()
-        code = code.strip()
-        if "," in code:
-            code = code.split(",")[0].strip()
-        if name:
-            name_to_code[name] = code
+    doc = Document(str(codes_path))
+    for table in doc.tables:
+        for row in table.rows:
+            cells = row.cells
+            if len(cells) < 2:
+                continue
+            name = (cells[0].text or "").strip()
+            code = (cells[1].text or "").strip()
+            if not name or name.lower() in ("country", "code", "name"):
+                continue
+            if "," in code:
+                code = code.split(",")[0].strip()
+            if code:
+                name_to_code[name] = code
+    if not name_to_code and doc.paragraphs:
+        for para in doc.paragraphs:
+            line = (para.text or "").strip()
+            if not line or "\t" not in line:
+                continue
+            parts = line.split("\t", 1)
+            name = parts[0].strip()
+            code = parts[1].strip() if len(parts) > 1 else ""
+            if "," in code:
+                code = code.split(",")[0].strip()
+            if name and code:
+                name_to_code[name] = code
     print(f"[OK] CountryCode Debug: loaded mappings: {len(name_to_code)}")
     if name_to_code:
         sample_items = list(name_to_code.items())[:5]
