@@ -107,10 +107,10 @@ print("Consolidated PDF Merger Execution")
 print("=" * 60)
 
 # Hardcode your input folder path here
-input_drive_folder = '/content/drive/MyDrive/RMT test/Archive'
+input_drive_folder = '/content/drive/MyDrive/RMT/Input PDFs'
 
 # Define the base output folder in Google Drive
-output_base_folder = '/content/drive/MyDrive/RMT/processing'
+output_base_folder = '/content/drive/MyDrive/RMT test/Input'
 
 # Ensure the output folder exists
 os.makedirs(output_base_folder, exist_ok=True)
