@@ -961,15 +961,17 @@ def _best_match_cost_type(original_name, name_list, cutoff=0.4):
     return best_name if best_score >= 0.3 else ''
 
 
-def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadata, cost_type_ref_path=None):
+def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadata, cost_type_ref_path=None, addition_dir=None):
     """
     Build rows for the Accessorial Costs tab from AdditionalCostsPart1 and AdditionalCostsPart2.
     Column mapping: CostName -> Original Cost Name; CostPrice/CostAmount -> Cost Price;
     CostCurrency -> Currency; PriceMechanism -> Rate by; ApplyTo -> Apply Over;
     CostCode -> Additional info(Cost Code); Validity Date -> Valid From; Carrier -> Carrier.
     Cost Type is filled by best-matching Original Cost Name against the 'Name' column from
-    an Accessorial Costs file. If cost_type_ref_path is not provided, uses addition/Accessorial Costs <ClientName>.xlsx
-    (e.g. Accessorial Costs Airbus Group.xlsx), else addition/Accessorial Costs.xlsx. Apply if, Valid To left empty.
+    an Accessorial Costs file. If cost_type_ref_path is not provided, uses addition_dir/Accessorial Costs <ClientName>.xlsx
+    (e.g. Accessorial Costs Airbus Group.xlsx), else addition_dir/Accessorial Costs.xlsx.
+    addition_dir: folder to look for accessorial files (default: same dir as this script / 'addition').
+    Apply if, Valid To left empty.
     """
     carrier = (metadata.get('carrier') or '').replace('\n', ' ')
     validity_date = (metadata.get('validity_date') or '')
@@ -997,11 +999,16 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
         rows.append(item_to_row(item))
 
     if cost_type_ref_path is None:
-        base = Path(__file__).resolve().parent
-        addition_dir = base / 'addition'
+        if addition_dir is not None:
+            addition_dir = Path(addition_dir)
+        else:
+            base = Path(__file__).resolve().parent
+            addition_dir = base / 'addition'
         client = (metadata.get('client') or '').strip()
         ext_order = ('.xlsx', '.xls', '.csv')
         # Prefer client-specific file: "Accessorial Costs <ClientName>.xlsx" (case-insensitive)
+        if not addition_dir.exists() or not addition_dir.is_dir():
+            addition_dir = Path(__file__).resolve().parent / 'addition'
         if client:
             target_stem_lower = f"Accessorial Costs {client}".lower()
             candidates = [p for p in addition_dir.iterdir() if p.is_file() and p.stem.lower() == target_stem_lower and p.suffix.lower() in ext_order]
@@ -1068,8 +1075,8 @@ def write_accessorial_sheet(workbook, sheet_name, rows):
     print(f"[OK] {sheet_name} tab created with {len(columns)} columns")
 
 
-def save_to_excel(data, output_path):
-    """Save all data to multi-tab Excel file"""
+def save_to_excel(data, output_path, addition_dir=None):
+    """Save all data to multi-tab Excel file. addition_dir: folder for accessorial files (default: script dir / addition)."""
     print(f"[*] Creating Excel file: {output_path}")
     
     try:
@@ -1139,6 +1146,7 @@ def save_to_excel(data, output_path):
             data.get('AdditionalCostsPart1', []),
             data.get('AdditionalCostsPart2', []),
             metadata,
+            addition_dir=addition_dir,
         )
         if accessorial_rows:
             write_accessorial_sheet(wb, "Accessorial Costs", accessorial_rows)
