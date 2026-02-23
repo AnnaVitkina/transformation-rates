@@ -121,7 +121,7 @@ def parse_args():
     parser.add_argument(
         "--accessorial-file",
         default=None,
-        help="Accessorial costs reference file path (.xlsx or .csv, must have Name column).",
+        help="Accessorial costs reference file path (optional). By default, addition/Accessorial Costs <ClientName>.xlsx is used per client.",
     )
     parser.add_argument(
         "--output-dir",
@@ -249,23 +249,24 @@ def _prepare_reference_files(country_codes_file, accessorial_file):
             shutil.copy2(src, dst)
             print(f"[OK] Country codes staged: {dst}")
 
-    # Accessorial: create_table looks at addition/Accessorial Costs.xlsx or .csv
+    # Accessorial: optional. If path exists, stage it; else skip (create_table will use addition/ by client or generic).
     if accessorial_file:
         src = Path(accessorial_file)
         if not src.exists():
-            raise FileNotFoundError(f"Accessorial file not found: {src}")
-        suffix = src.suffix.lower()
-        if suffix not in (".xlsx", ".xls", ".csv"):
-            raise ValueError("Accessorial file must be .xlsx/.xls or .csv")
-        dst_dir = PROJECT_ROOT / "addition"
-        dst_name = "Accessorial Costs.xlsx" if suffix in (".xlsx", ".xls") else "Accessorial Costs.csv"
-        dst = dst_dir / dst_name
-        if src.resolve() == dst.resolve():
-            print(f"[OK] Accessorial used in place: {src}")
+            print(f"[*] Accessorial file not found at {src}; create_table will use addition/ (client-specific or generic).")
         else:
-            dst_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            print(f"[OK] Accessorial reference staged: {dst}")
+            suffix = src.suffix.lower()
+            if suffix not in (".xlsx", ".xls", ".csv"):
+                raise ValueError("Accessorial file must be .xlsx/.xls or .csv")
+            dst_dir = PROJECT_ROOT / "addition"
+            dst_name = "Accessorial Costs.xlsx" if suffix in (".xlsx", ".xls") else "Accessorial Costs.csv"
+            dst = dst_dir / dst_name
+            if src.resolve() == dst.resolve():
+                print(f"[OK] Accessorial used in place: {src}")
+            else:
+                dst_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+                print(f"[OK] Accessorial reference staged: {dst}")
 
 
 def run_pipeline(
@@ -472,6 +473,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
