@@ -1,8 +1,3 @@
-# Setup and PDF Merging in one block
-
-# 1. Install necessary library
-!pip install pypdf
-
 # 2. Import modules
 import os
 import re
