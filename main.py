@@ -334,14 +334,39 @@ def save_output(data, output_path):
 
 
 def read_client_list(filepath):
-    """Read list of client names from file (one per non-empty line)"""
+    """Read list of client names from file. Supports .txt (one per line) or .docx (table first column or one per paragraph)."""
+    path = Path(filepath)
+    if not path.exists():
+        print(f"[WARN] Client file not found: {filepath}")
+        return []
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        if path.suffix.lower() == ".docx":
+            try:
+                from docx import Document
+            except ImportError:
+                print("[ERROR] python-docx is required to read clients.docx. Install with: pip install python-docx")
+                return []
+            doc = Document(str(path))
+            names = []
+            for table in doc.tables:
+                for row in table.rows:
+                    if row.cells:
+                        cell_text = (row.cells[0].text or "").strip()
+                        if cell_text and cell_text.lower() not in ("client", "name", "client name"):
+                            names.append(cell_text)
+            if not names:
+                for para in doc.paragraphs:
+                    text = (para.text or "").strip()
+                    if text:
+                        names.append(text)
+            print(f"    [DEBUG] Client list: {names}")
+            return names
+        with open(filepath, "r", encoding="utf-8") as f:
             names = [line.strip() for line in f if line.strip()]
         print(f"    [DEBUG] Client list: {names}")
         return names
-    except FileNotFoundError:
-        print(f"[WARN] Client file not found: {filepath}")
+    except Exception as e:
+        print(f"[WARN] Failed to read client file {filepath}: {e}")
         return []
 
 
@@ -449,7 +474,7 @@ def main():
     # Define paths (input can be overridden by command line)
     input_file = parse_args()
     output_file = 'processing/extracted_data.json'
-    client_file = 'addition/clients.txt'
+    client_file = 'addition/clients.docx'
     
     print(f"[*] Input file: {input_file}")
     print()
