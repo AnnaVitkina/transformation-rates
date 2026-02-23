@@ -1023,7 +1023,7 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
                 original = row.get('Original Cost Name', '')
                 row['Cost Type'] = _best_match_cost_type(original, name_list)
 
-    return rows
+    return rows, cost_type_ref_path
 
 
 def write_accessorial_sheet(workbook, sheet_name, rows):
@@ -1136,7 +1136,7 @@ def save_to_excel(data, output_path, accessorial_folder=None):
             write_sheet(wb, "AdditionalCostsPart2", additional_costs_2_rows, metadata)
         
         # Tab 9: Accessorial Costs (combined from AdditionalCostsPart1 and AdditionalCostsPart2)
-        accessorial_rows = build_accessorial_costs_rows(
+        accessorial_rows, accessorial_file_used = build_accessorial_costs_rows(
             data.get('AdditionalCostsPart1', []),
             data.get('AdditionalCostsPart2', []),
             metadata,
@@ -1154,6 +1154,8 @@ def save_to_excel(data, output_path, accessorial_folder=None):
         print(f"[OK] Excel file saved successfully")
         print(f"  - Tabs: {len(wb.sheetnames)}")
         print(f"  - File size: {file_size_kb:.2f} KB")
+        
+        return str(accessorial_file_used) if accessorial_file_used else None
         
     except Exception as e:
         print(f"[ERROR] Failed to save Excel: {e}")
