@@ -416,15 +416,23 @@ def run_pipeline(
     # Step 4: Build Excel from extracted JSON object
     print("Step 4: Creating Excel workbook...")
     output_xlsx_path.parent.mkdir(parents=True, exist_ok=True)
-    accessorial_used = _run_quiet(
-        "Create Excel",
-        create_table.save_to_excel,
-        processed_data,
-        str(output_xlsx_path),
-        accessorial_folder=os.environ.get("ACCESSORIAL_FOLDER") or HARDCODED_ACCESSORIAL_FILE_FOLDER,
-    )
+    accessorial_folder = os.environ.get("ACCESSORIAL_FOLDER") or HARDCODED_ACCESSORIAL_FILE_FOLDER
+    # Support both create_table versions (with and without accessorial_folder parameter)
+    import inspect
+    sig = inspect.signature(create_table.save_to_excel)
+    if "accessorial_folder" in sig.parameters:
+        accessorial_used = _run_quiet(
+            "Create Excel",
+            create_table.save_to_excel,
+            processed_data,
+            str(output_xlsx_path),
+            accessorial_folder=accessorial_folder,
+        )
+    else:
+        accessorial_used = _run_quiet("Create Excel", create_table.save_to_excel, processed_data, str(output_xlsx_path))
     print(f"[OK] Excel created: {output_xlsx_path}")
-    print(f"[*] Accessorial file used for Cost Type: {accessorial_used or '(none)'}")
+    if accessorial_used is not None:
+        print(f"[*] Accessorial file used for Cost Type: {accessorial_used}")
     print()
 
     # Step 5: Build CountryZoning TXT from generated Excel
@@ -481,16 +489,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
