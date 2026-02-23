@@ -35,15 +35,19 @@ def create_metadata_sheet(workbook, metadata):
     header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=12)
     
-    # Data
+    # Data (coerce None to '' so string methods don't fail)
+    def _str(v):
+        s = "" if v is None else (v.replace("\n", " ") if isinstance(v, str) else str(v))
+        return s
+
     data = [
         ["Field", "Value"],
-        ["Client", metadata.get('client', '')],
-        ["Carrier", metadata.get('carrier', '').replace('\n', ' ')],
-        ["Validity Date", metadata.get('validity_date', '')],
-        ["FileName", metadata.get('FileName', '')],
-        ["Extraction Date", metadata.get('extraction_date', '')],
-        ["Extraction Source", metadata.get('extraction_source', '')]
+        ["Client", _str(metadata.get("client"))],
+        ["Carrier", _str(metadata.get("carrier"))],
+        ["Validity Date", _str(metadata.get("validity_date"))],
+        ["FileName", _str(metadata.get("FileName"))],
+        ["Extraction Date", _str(metadata.get("extraction_date"))],
+        ["Extraction Source", _str(metadata.get("extraction_source"))],
     ]
     
     for row_idx, row_data in enumerate(data, 1):
@@ -64,10 +68,10 @@ def create_metadata_sheet(workbook, metadata):
 def pivot_main_costs(main_costs, metadata):
     """Pivot MainCosts data - zones as rows, weights as columns (legacy flat view)"""
     rows = []
-    client = metadata.get('client', '')
-    carrier = metadata.get('carrier', '').replace('\n', ' ')
-    validity_date = metadata.get('validity_date', '')
-    
+    client = (metadata.get('client') or '')
+    carrier = (metadata.get('carrier') or '').replace('\n', ' ')
+    validity_date = (metadata.get('validity_date') or '')
+
     for section_idx, rate_card in enumerate(main_costs, 1):
         service_type = rate_card.get('service_type') or ''
         cost_category = rate_card.get('cost_category', '')
@@ -455,56 +459,31 @@ def _fill_country_zoning_rate_names(rows):
 
 def _load_country_codes(codes_path=None):
     """
-    Load country name -> code from dhl_country_codes.docx.
-    Expects a Word document with a table: first column = country name, second column = code.
+    Load country name -> code from dhl_country_codes.txt (format: Country\\tCode).
     If code contains a comma, the first code is used. Returns dict.
     """
     if codes_path is None:
         base = Path(__file__).resolve().parent
-        codes_path = base / "input" / "dhl_country_codes.docx"
+        codes_path = base / "input" / "dhl_country_codes.txt"
         if not codes_path.exists():
-            codes_path = base / "addition" / "dhl_country_codes.docx"
+            codes_path = base / "addition" / "dhl_country_codes.txt"
     print(f"[*] CountryCode Debug: trying codes file: {codes_path}")
     codes_path = Path(codes_path)
     if not codes_path.exists():
         print(f"[WARN] CountryCode Debug: codes file not found: {codes_path}")
         return {}
-    suffix = codes_path.suffix.lower()
-    if suffix != ".docx":
-        print(f"[WARN] CountryCode Debug: expected .docx, got {suffix}")
-        return {}
-    try:
-        from docx import Document
-    except ImportError:
-        print("[ERROR] python-docx is required to read country codes. Install with: pip install python-docx")
-        return {}
     name_to_code = {}
-    doc = Document(str(codes_path))
-    for table in doc.tables:
-        for row in table.rows:
-            cells = row.cells
-            if len(cells) < 2:
-                continue
-            name = (cells[0].text or "").strip()
-            code = (cells[1].text or "").strip()
-            if not name or name.lower() in ("country", "code", "name"):
-                continue
-            if "," in code:
-                code = code.split(",")[0].strip()
-            if code:
-                name_to_code[name] = code
-    if not name_to_code and doc.paragraphs:
-        for para in doc.paragraphs:
-            line = (para.text or "").strip()
-            if not line or "\t" not in line:
-                continue
-            parts = line.split("\t", 1)
-            name = parts[0].strip()
-            code = parts[1].strip() if len(parts) > 1 else ""
-            if "," in code:
-                code = code.split(",")[0].strip()
-            if name and code:
-                name_to_code[name] = code
+    for line in codes_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or "\t" not in line:
+            continue
+        name, code = line.split("\t", 1)
+        name = name.strip()
+        code = code.strip()
+        if "," in code:
+            code = code.split(",")[0].strip()
+        if name:
+            name_to_code[name] = code
     print(f"[OK] CountryCode Debug: loaded mappings: {len(name_to_code)}")
     if name_to_code:
         sample_items = list(name_to_code.items())[:5]
@@ -590,10 +569,10 @@ def _fill_country_zoning_country_codes(rows, name_to_code):
 def flatten_array_data(array_data, metadata, field_name):
     """Flatten array data to table format"""
     rows = []
-    client = metadata.get('client', '')
-    carrier = metadata.get('carrier', '').replace('\n', ' ')
-    validity_date = metadata.get('validity_date', '')
-    
+    client = (metadata.get('client') or '')
+    carrier = (metadata.get('carrier') or '').replace('\n', ' ')
+    validity_date = (metadata.get('validity_date') or '')
+
     for item in array_data:
         row = {
             'Client': client,
@@ -627,9 +606,9 @@ def pivot_added_rates(added_rates, metadata):
     where they exist in the JSON (the header row of each block); data rows leave them empty.
     """
     rows = []
-    client = metadata.get('client', '')
-    carrier = metadata.get('carrier', '').replace('\n', ' ')
-    validity_date = metadata.get('validity_date', '')
+    client = (metadata.get('client') or '')
+    carrier = (metadata.get('carrier') or '').replace('\n', ' ')
+    validity_date = (metadata.get('validity_date') or '')
     zone_column_names = []  # ordered list of (Zone1, "Zone 1"), (Zone2, "Zone 2"), ...
 
     for item in added_rates:
@@ -992,7 +971,7 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
     addition/Accessorial Costs file if cost_type_ref_path is provided. Apply if, Valid To left empty.
     """
     carrier = (metadata.get('carrier') or '').replace('\n', ' ')
-    validity_date = metadata.get('validity_date', '')
+    validity_date = (metadata.get('validity_date') or '')
 
     def item_to_row(item):
         cost_price = item.get('CostPrice') or item.get('CostAmount') or ''
