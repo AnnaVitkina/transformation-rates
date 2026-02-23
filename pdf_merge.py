@@ -2,6 +2,7 @@
 import os
 import re
 import sys
+import shutil # Added for file operations
 from pypdf import PdfWriter, PdfReader
 from pathlib import Path
 from google.colab import drive
@@ -112,8 +113,12 @@ input_drive_folder = '/content/drive/MyDrive/RMT/Input PDFs'
 # Define the base output folder in Google Drive
 output_base_folder = '/content/drive/MyDrive/RMT test/Input'
 
-# Ensure the output folder exists
+# Define the archive folder in Google Drive
+archive_folder = '/content/drive/MyDrive/RMT/Archive PDFs'
+
+# Ensure the output and archive folders exist
 os.makedirs(output_base_folder, exist_ok=True)
+os.makedirs(archive_folder, exist_ok=True)
 
 # Find all PDF files in the input folder
 all_pdf_files_in_folder = sorted(Path(input_drive_folder).glob("*.pdf"), key=_natural_sort_key)
@@ -130,7 +135,7 @@ else:
     print("  2. Select SPECIFIC PDF files to merge")
     merge_choice = input("Enter your choice (1 or 2): ").strip()
 
-    files_to_merge = []
+    files_to_merge = [] # This will store the ORIGINAL paths of files chosen by the user
 
     if merge_choice == "1":
         files_to_merge = all_pdf_files_in_folder
@@ -144,7 +149,7 @@ else:
             if selection_input == 'all':
                 files_to_merge = all_pdf_files_in_folder
                 break
-            
+
             selected_indices = []
             try:
                 if selection_input: # Only process if input is not empty
@@ -154,18 +159,18 @@ else:
                 continue
 
             valid_selection = True
-            temp_files_to_merge = []
+            temp_files_to_merge_list = [] # Store selected files temporarily for validation
             for idx in selected_indices:
                 if 0 <= idx < len(all_pdf_files_in_folder):
-                    temp_files_to_merge.append(all_pdf_files_in_folder[idx])
+                    temp_files_to_merge_list.append(all_pdf_files_in_folder[idx])
                 else:
                     print(f"Invalid file number: {idx+1}. Please enter valid numbers.")
                     valid_selection = False
                     break
-            
+
             if valid_selection:
-                if temp_files_to_merge:
-                    files_to_merge = temp_files_to_merge
+                if temp_files_to_merge_list:
+                    files_to_merge = temp_files_to_merge_list
                     break
                 else:
                     print("No files selected. Please enter valid numbers or 'all'.")
@@ -177,6 +182,18 @@ else:
         files_to_merge = all_pdf_files_in_folder
 
     if files_to_merge:
+        # Define a temporary folder for files being processed
+        processing_temp_folder = os.path.join(output_base_folder, "temp_selected_pdfs")
+        os.makedirs(processing_temp_folder, exist_ok=True)
+        print(f"\nCopying selected PDFs to temporary processing folder: {processing_temp_folder}")
+
+        processed_files_to_merge = []
+        for original_file_path in files_to_merge:
+            destination_file_path = os.path.join(processing_temp_folder, os.path.basename(original_file_path))
+            shutil.copy2(original_file_path, destination_file_path) # Use copy2 to preserve metadata
+            processed_files_to_merge.append(destination_file_path)
+            print(f"  Copied: {os.path.basename(original_file_path)}")
+
         # Prompt the user for the output file name
         output_filename = input("\nEnter output file name (e.g., 'my_merged_doc.pdf', press Enter for 'merged_output.pdf'): ").strip()
 
@@ -187,7 +204,21 @@ else:
         # Construct the full output file path
         output_drive_file = os.path.join(output_base_folder, output_filename)
 
-        # Call the merge function with the selected files
-        merge_pdfs(files_to_merge, output_drive_file)
+        # Call the merge function with the COPIED files
+        if merge_pdfs(processed_files_to_merge, output_drive_file):
+            # Move original files to archive after successful merge
+            print(f"\nMoving original input files to archive folder: {archive_folder}")
+            for original_file_path in files_to_merge:
+                try:
+                    shutil.move(original_file_path, os.path.join(archive_folder, os.path.basename(original_file_path)))
+                    print(f"  Moved: {os.path.basename(original_file_path)}")
+                except Exception as move_e:
+                    print(f"  Error moving '{os.path.basename(original_file_path)}': {move_e}")
+
+        # Clean up temporary files after merging
+        print(f"\nCleaning up temporary processing folder: {processing_temp_folder}")
+        shutil.rmtree(processing_temp_folder)
+        print("Temporary files removed.")
+
     else:
         print("No files were selected for merging. Operation cancelled.")
