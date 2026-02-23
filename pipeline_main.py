@@ -19,8 +19,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 HARDCODED_INPUT_FOLDER = "/content/drive/MyDrive/RMT test/Output"
 HARDCODED_ARCHIVE_FOLDER = "/content/drive/MyDrive/RMT/archive"
-HARDCODED_CLIENTS_FILE = "/content/drive/MyDrive/RMT/addition/clients.docx"
-HARDCODED_COUNTRY_CODES_FILE = "/content/drive/MyDrive/RMT/addition/dhl_country_codes.docx"
+HARDCODED_CLIENTS_FILE = "/content/drive/MyDrive/RMT/addition/clients.txt"
+HARDCODED_COUNTRY_CODES_FILE = "/content/drive/MyDrive/RMT/addition/dhl_country_codes.txt"
 HARDCODED_ACCESSORIAL_FILE = "/content/drive/MyDrive/RMT/addition/Accessorial Costs.xlsx"
 HARDCODED_OUTPUT_DIR = "/content/drive/MyDrive/RMT/output"
 
@@ -472,5 +472,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
