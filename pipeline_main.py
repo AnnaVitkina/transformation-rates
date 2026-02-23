@@ -325,6 +325,9 @@ def run_pipeline(
     output_root = Path(output_dir) if output_dir else (PROJECT_ROOT / "output")
     output_root.mkdir(parents=True, exist_ok=True)
 
+    processing_root = PROJECT_ROOT / "processing"
+    processing_root.mkdir(parents=True, exist_ok=True)
+
     # Name outputs after input file; if file exists, use stem_1, stem_2, ...
     input_stem = Path(input_file).stem
 
@@ -341,7 +344,7 @@ def run_pipeline(
 
     output_xlsx_path = _unique_path(output_root, input_stem, ".xlsx")
     output_txt_path = _unique_path(output_root, input_stem + "_CountryZoning_by_RateName", ".txt")
-    extracted_json_path = output_root / "extracted_data.json"
+    extracted_json_path = processing_root / f"{input_stem}_extracted_data.json"
     default_clients = PROJECT_ROOT / "addition" / "clients.txt"
     clients_path = Path(clients_file) if clients_file else default_clients
 
@@ -489,3 +492,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
