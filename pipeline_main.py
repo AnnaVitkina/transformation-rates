@@ -290,8 +290,7 @@ def run_pipeline(
         country_codes_file = HARDCODED_COUNTRY_CODES_FILE
     if accessorial_file is None:
         accessorial_file = os.environ.get("ACCESSORIAL_FILE")
-    if accessorial_file is None:
-        accessorial_file = HARDCODED_ACCESSORIAL_FILE
+    # No hardcoded default for accessorial: create_table picks from addition/ by client (Accessorial Costs <ClientName>.xlsx) or generic
     if output_dir is None:
         output_dir = os.environ.get("OUTPUT_DIR")
     if output_dir is None:
@@ -306,8 +305,7 @@ def run_pipeline(
             clients_file = LOCAL_CLIENTS_FILE
         if country_codes_file == HARDCODED_COUNTRY_CODES_FILE:
             country_codes_file = LOCAL_COUNTRY_CODES_FILE
-        if accessorial_file == HARDCODED_ACCESSORIAL_FILE:
-            accessorial_file = LOCAL_ACCESSORIAL_FILE
+        # accessorial_file: no default; create_table uses addition/ by client
         if output_dir == HARDCODED_OUTPUT_DIR:
             output_dir = LOCAL_OUTPUT_DIR
         if archive_folder in (None, HARDCODED_ARCHIVE_FOLDER):
@@ -317,7 +315,9 @@ def run_pipeline(
         input_folder = _use_drive_or_local(input_folder, LOCAL_INPUT_FOLDER, is_dir=True) if input_folder else input_folder
         clients_file = _use_drive_or_local(clients_file, LOCAL_CLIENTS_FILE)
         country_codes_file = _use_drive_or_local(country_codes_file, LOCAL_COUNTRY_CODES_FILE)
-        accessorial_file = _use_drive_or_local(accessorial_file, LOCAL_ACCESSORIAL_FILE)
+        # Cost Type uses accessorial_folder only; single-file path is for optional staging only - do not substitute local file
+        if accessorial_file and not Path(accessorial_file).exists():
+            accessorial_file = None
         output_dir = _use_drive_or_local(output_dir, LOCAL_OUTPUT_DIR, is_dir=True)
         if archive_folder:
             archive_folder = _use_drive_or_local(archive_folder, LOCAL_ARCHIVE_FOLDER, is_dir=True)
@@ -416,8 +416,15 @@ def run_pipeline(
     # Step 4: Build Excel from extracted JSON object
     print("Step 4: Creating Excel workbook...")
     output_xlsx_path.parent.mkdir(parents=True, exist_ok=True)
-    _run_quiet("Create Excel", create_table.save_to_excel, processed_data, str(output_xlsx_path))
+    accessorial_used = _run_quiet(
+        "Create Excel",
+        create_table.save_to_excel,
+        processed_data,
+        str(output_xlsx_path),
+        accessorial_folder=os.environ.get("ACCESSORIAL_FOLDER") or HARDCODED_ACCESSORIAL_FILE_FOLDER,
+    )
     print(f"[OK] Excel created: {output_xlsx_path}")
+    print(f"[*] Accessorial file used for Cost Type: {accessorial_used or '(none)'}")
     print()
 
     # Step 5: Build CountryZoning TXT from generated Excel
@@ -474,6 +481,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
