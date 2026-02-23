@@ -2,7 +2,6 @@
 PDF Merger
 Merges multiple PDF files into a single PDF document.
 """
-!pip install pypdf
 import os
 import re
 import sys
