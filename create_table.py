@@ -9,10 +9,6 @@ import os
 import re
 from pathlib import Path
 
-# Hardcoded path for accessorial costs files (Shared Drive). Used to find file whose name contains the client name.
-ACCESSORIAL_COSTS_ADDITION_DIR = "/content/drive/Shareddrives/FA Ops Europe: Rate Maintenance Team /Documents/AI Adoption RMT/RMT/addition"
-
-
 def load_extracted_data(filepath):
     """Load the extracted JSON data"""
     print(f"[*] Loading extracted data from: {filepath}")
@@ -964,17 +960,13 @@ def _best_match_cost_type(original_name, name_list, cutoff=0.4):
     return best_name if best_score >= 0.3 else ''
 
 
-def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadata, cost_type_ref_path=None, addition_dir=None):
+def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadata, cost_type_ref_path=None, accessorial_folder=None):
     """
     Build rows for the Accessorial Costs tab from AdditionalCostsPart1 and AdditionalCostsPart2.
-    Column mapping: CostName -> Original Cost Name; CostPrice/CostAmount -> Cost Price;
-    CostCurrency -> Currency; PriceMechanism -> Rate by; ApplyTo -> Apply Over;
-    CostCode -> Additional info(Cost Code); Validity Date -> Valid From; Carrier -> Carrier.
     Cost Type is filled by best-matching Original Cost Name against the 'Name' column from
-    an Accessorial Costs file. If cost_type_ref_path is not provided, looks in ACCESSORIAL_COSTS_ADDITION_DIR
-    (hardcoded Shared Drive path) for a file whose name contains the client name (case-insensitive);
-    if that dir does not exist, uses addition_dir. Fallback: generic Accessorial Costs.xlsx/.csv.
-    addition_dir: fallback folder when hardcoded path is not available. Apply if, Valid To left empty.
+    an accessorial file. Client name comes from metadata (from the JSON). We use the file from
+    accessorial_folder whose filename contains the client name (case-insensitive). There is no
+    generic Accessorial Costs.xlsx; only client-named files in that folder. Apply if, Valid To left empty.
     """
     carrier = (metadata.get('carrier') or '').replace('\n', ' ')
     validity_date = (metadata.get('validity_date') or '')
@@ -1001,20 +993,11 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
     for item in additional_costs_2 or []:
         rows.append(item_to_row(item))
 
-    if cost_type_ref_path is None:
+    if cost_type_ref_path is None and accessorial_folder:
+        accessorial_dir = Path(accessorial_folder)
         client = (metadata.get('client') or '').strip()
         ext_order = ('.xlsx', '.xls', '.csv')
-        # Use hardcoded Shared Drive path for accessorial files; fallback to addition_dir if it does not exist
-        accessorial_dir = Path(ACCESSORIAL_COSTS_ADDITION_DIR)
-        if not accessorial_dir.exists() or not accessorial_dir.is_dir():
-            if addition_dir is not None:
-                accessorial_dir = Path(addition_dir)
-            else:
-                accessorial_dir = Path(__file__).resolve().parent / 'addition'
-            if not accessorial_dir.exists() or not accessorial_dir.is_dir():
-                accessorial_dir = Path(__file__).resolve().parent / 'addition'
-        # Find file whose name contains the client name (case-insensitive)
-        if client:
+        if client and accessorial_dir.exists() and accessorial_dir.is_dir():
             client_lower = client.lower()
             candidates = [
                 p for p in accessorial_dir.iterdir()
@@ -1025,19 +1008,13 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
                     candidates,
                     key=lambda p: ext_order.index(p.suffix.lower()) if p.suffix.lower() in ext_order else 99,
                 )
-                print(f"[*] Accessorial cost mapping: using file (client name in filename) {cost_type_ref_path.name}")
-        # Fallback to generic Accessorial Costs.xlsx / .csv (case-insensitive)
-        if cost_type_ref_path is None:
-            candidates = [
-                p for p in accessorial_dir.iterdir()
-                if p.is_file() and p.stem.lower() == "accessorial costs" and p.suffix.lower() in ('.xlsx', '.csv')
-            ]
-            if candidates:
-                cost_type_ref_path = min(
-                    candidates,
-                    key=lambda p: ('.xlsx', '.csv').index(p.suffix.lower()) if p.suffix.lower() in ('.xlsx', '.csv') else 99,
-                )
-                print(f"[*] Accessorial cost mapping: using generic file {cost_type_ref_path.name} (no file name containing '{client or '(no client)'}')")
+                print(f"[*] Accessorial cost mapping: using file (client '{client}' in filename) {cost_type_ref_path.name}")
+            else:
+                print(f"[*] Accessorial cost mapping: no file with client '{client}' in name in {accessorial_dir}")
+        elif not client:
+            print(f"[*] Accessorial cost mapping: no client in metadata, Cost Type left empty")
+        elif not accessorial_dir.exists() or not accessorial_dir.is_dir():
+            print(f"[*] Accessorial cost mapping: folder not found {accessorial_dir}, Cost Type left empty")
 
     if cost_type_ref_path:
         name_list = _load_accessorial_cost_type_names(cost_type_ref_path)
@@ -1092,8 +1069,8 @@ def write_accessorial_sheet(workbook, sheet_name, rows):
     print(f"[OK] {sheet_name} tab created with {len(columns)} columns")
 
 
-def save_to_excel(data, output_path, addition_dir=None):
-    """Save all data to multi-tab Excel file. addition_dir: folder for accessorial files (default: script dir / addition)."""
+def save_to_excel(data, output_path, accessorial_folder=None):
+    """Save all data to multi-tab Excel file. accessorial_folder: folder with one .xlsx per client (filename contains client name); used to fill Cost Type column."""
     print(f"[*] Creating Excel file: {output_path}")
     
     try:
@@ -1163,7 +1140,7 @@ def save_to_excel(data, output_path, addition_dir=None):
             data.get('AdditionalCostsPart1', []),
             data.get('AdditionalCostsPart2', []),
             metadata,
-            addition_dir=addition_dir,
+            accessorial_folder=accessorial_folder,
         )
         if accessorial_rows:
             write_accessorial_sheet(wb, "Accessorial Costs", accessorial_rows)
