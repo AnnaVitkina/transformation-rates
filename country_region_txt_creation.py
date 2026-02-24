@@ -37,7 +37,10 @@ def create_country_region_txt(
     wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
     if sheet_name not in wb.sheetnames:
         wb.close()
-        raise ValueError(f"Sheet '{sheet_name}' not found in {excel_path}")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("", encoding="utf-8")
+        print(f"[WARN] Sheet '{sheet_name}' not found in {excel_path} (no CountryZoning data in this rate card). Wrote empty TXT: {output_path}")
+        return str(output_path)
     print(f"[*] TXT Debug: workbook sheets={wb.sheetnames}")
 
     ws = wb[sheet_name]
@@ -121,3 +124,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
