@@ -252,6 +252,20 @@ def save_to_excel(data, output_path, accessorial_folder=None):
         # Save the finished workbook
         wb.save(output_path)
 
+        # -----------------------------------------------------------------------
+        # Post-processing: expand MainCosts lanes using AdditionalZoning data.
+        # This adds new rows (one per starred-country sub-zone entry) and new
+        # columns (Origin Country, Destination Country, Origin City,
+        # Destination City, Custom Zone) to the MainCosts tab.
+        # Runs only when AdditionalZoning data is present.
+        # -----------------------------------------------------------------------
+        if data.get('AdditionalZoning'):
+            try:
+                from expand_additional_zoning import expand_main_costs_with_additional_zoning
+                expand_main_costs_with_additional_zoning(output_path)
+            except Exception as e:
+                print(f"[WARN] AdditionalZoning expansion failed (non-fatal): {e}")
+
         file_size = os.path.getsize(output_path)
         file_size_kb = file_size / 1024
 
