@@ -595,7 +595,8 @@ def build_matrix_main_costs(main_costs, metadata, zoning_matrix=None):
             for weight, price in weight_prices.items():
                 row[(cost_category, weight)] = price
 
-    # Get the carrier's country (e.g. "France") to fill blank Origin/Destination fields
+    # Get the carrier's country name (e.g. "Netherlands") — used to fill Origin/Destination
+    # for domestic and non-zoned lanes where the carrier country is the implicit value.
     carrier_last = global_country(metadata)
 
     # Sort the lanes: first by service name (alphabetical), then by zone (numeric before letter)
@@ -610,12 +611,12 @@ def build_matrix_main_costs(main_costs, metadata, zoning_matrix=None):
         matrix_zone = (row.get('Matrix zone') or '').strip()
 
         if service == 'DHL EXPRESS DOMESTIC':
-            # Domestic service: both Origin and Destination are the carrier's country
+            # Domestic: both sides are the carrier's own country
             if carrier_last:
                 row['Origin'] = carrier_last
                 row['Destination'] = carrier_last
         elif not matrix_zone:
-            # Non-zoned lane: fill whichever of Origin/Destination is still empty
+            # Non-zoned lane: fill whichever side is still empty with the carrier country
             if carrier_last:
                 if not (row.get('Origin') or '').strip():
                     row['Origin'] = carrier_last
