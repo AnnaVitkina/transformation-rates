@@ -220,6 +220,16 @@ def _country_to_code(country, name_to_code):
     variants.append(n.replace(" And ", " & "))
     variants.append(n.replace(" & ", " And "))
 
+    # Handle "Name, The" <-> "The Name" pattern
+    # e.g. "Netherlands" -> try "Netherlands, The"
+    #      "Netherlands, The" -> try "Netherlands"
+    if n.endswith(", The"):
+        variants.append(n[:-5].strip())           # "Netherlands, The" -> "Netherlands"
+    else:
+        variants.append(f"{n}, The")              # "Netherlands" -> "Netherlands, The"
+    if n.lower().startswith("the "):
+        variants.append(n[4:].strip() + ", The")  # "The Netherlands" -> "Netherlands, The"
+
     for suffix in (", Peoples Republic", ", People's Republic", ", Peoples Rep.", ", People's Rep.",
                    " Peoples Republic", " People's Republic"):
         if n.endswith(suffix) or suffix in n:
@@ -326,10 +336,18 @@ def build_zone_label_lookup(country_zoning):
         if not zone_number:
             continue
 
-        # Expand combined rate names joined by " & " into individual variants.
-        # e.g. "DHL ECONOMY SELECT EXPORT ZONING & IMPORT ZONING"
-        #   -> ["DHL ECONOMY SELECT EXPORT ZONING", "DHL ECONOMY SELECT IMPORT ZONING"]
-        # The base prefix (everything before the first " & ") is prepended to each suffix.
+        # Compute the canonical label from the FULL (unexpanded) rate name.
+        # For combined names like "DHL EXPRESS INTERNATIONAL EXPORT ZONING & IMPORT ZONING"
+        # this gives "WW_EXP_IMP_ZONE" -> label "WW_EXP_IMP_ZONE_3".
+        # For single names like "DHL ECONOMY SELECT EXPORT ZONING" it gives "ECONOMY_EXP_ZONE_3".
+        canonical_prefix = _transform_rate_name_to_short(effective_rate_name)
+        canonical_label = f"{canonical_prefix}_{zone_number}" if canonical_prefix else None
+
+        # Expand combined rate names joined by " & " into individual variants so we can
+        # register the canonical label under each individual service prefix.
+        # e.g. "DHL EXPRESS INTERNATIONAL EXPORT ZONING & IMPORT ZONING"
+        #   -> ["DHL EXPRESS INTERNATIONAL EXPORT ZONING",
+        #       "DHL EXPRESS INTERNATIONAL IMPORT ZONING"]
         expanded_names = _expand_combined_rate_name(effective_rate_name)
 
         for name_variant in expanded_names:
@@ -337,14 +355,16 @@ def build_zone_label_lookup(country_zoning):
             if not short_prefix:
                 continue
 
-            label = f"{short_prefix}_{zone_number}"
+            # Use the canonical (combined) label so both EXPORT and IMPORT services
+            # get the same zone label (e.g. "WW_EXP_IMP_ZONE_3" for both).
+            label = canonical_label or f"{short_prefix}_{zone_number}"
 
-            # Store under the full prefix (e.g. "ECONOMY_EXP_ZONE")
+            # Store under the full variant prefix (e.g. "WW_EXP_ZONE", "WW_IMP_ZONE")
             lookup[(short_prefix, zone_number)] = label
 
             # Also store under the prefix WITHOUT the trailing "_ZONE" so that a service
-            # name like "DHL ECONOMY SELECT EXPORT" (no "ZONING" word) still matches.
-            # e.g. "ECONOMY_EXP_ZONE" -> also register under "ECONOMY_EXP"
+            # name like "DHL EXPRESS WORLDWIDE EXPORT" (no "ZONING" word) still matches.
+            # e.g. "WW_EXP_ZONE" -> also register under "WW_EXP"
             prefix_no_zone = re.sub(r'_ZONE$', '', short_prefix)
             if prefix_no_zone != short_prefix:
                 lookup.setdefault((prefix_no_zone, zone_number), label)
