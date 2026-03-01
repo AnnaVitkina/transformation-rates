@@ -480,7 +480,9 @@ def run_pipeline(
     output_root = Path(output_dir) if output_dir else (PROJECT_ROOT / "output")
     output_root.mkdir(parents=True, exist_ok=True)
 
-    processing_root = PROJECT_ROOT / "processing"
+    # processing/ lives next to output/ — on Drive when in Colab, local otherwise.
+    # Deriving it from output_root ensures it ends up on the same storage as the output.
+    processing_root = output_root.parent / "processing"
     processing_root.mkdir(parents=True, exist_ok=True)
 
     # Build output file names based on the input file's stem (name without extension).
@@ -673,6 +675,34 @@ def run_pipeline(
     print()
 
     # -----------------------------------------------------------------------
+    # Step 4b: Save the full Excel to processing/, then trim the output copy
+    # to only the four tabs needed by downstream consumers:
+    #   Metadata, MainCosts, CountryZoning, Accessorial Costs
+    # -----------------------------------------------------------------------
+    print("Step 4b: Saving full workbook to processing/ and trimming output...")
+    import shutil as _shutil
+    import openpyxl as _openpyxl
+
+    # Move full xlsx to processing/
+    processing_xlsx_path = processing_root / output_xlsx_path.name
+    _shutil.copy2(str(output_xlsx_path), str(processing_xlsx_path))
+    print(f"[*] Full workbook copied to processing: {processing_xlsx_path}")
+
+    # Rewrite the output xlsx keeping only the four required tabs
+    KEEP_TABS = ["Metadata", "MainCosts", "CountryZoning", "Accessorial Costs"]
+    try:
+        _wb = _openpyxl.load_workbook(str(output_xlsx_path))
+        tabs_to_remove = [s for s in _wb.sheetnames if s not in KEEP_TABS]
+        for tab in tabs_to_remove:
+            del _wb[tab]
+        _wb.save(str(output_xlsx_path))
+        kept = [s for s in _openpyxl.load_workbook(str(output_xlsx_path), read_only=True).sheetnames]
+        print(f"[OK] Output workbook trimmed to tabs: {kept}")
+    except Exception as e:
+        print(f"[WARN] Could not trim output workbook (non-fatal): {e}")
+    print()
+
+    # -----------------------------------------------------------------------
     # Step 5: Build the CountryZoning TXT file from the Excel workbook.
     # This reads the CountryZoning tab of the Excel file and writes a plain-text
     # summary: one line per RateName listing all country codes for that rate.
@@ -743,5 +773,3 @@ def main():
 # Does NOT run when imported as a module by another script (e.g. in Colab).
 if __name__ == "__main__":
     main()
-
-
