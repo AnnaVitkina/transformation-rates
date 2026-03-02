@@ -409,19 +409,34 @@ def detect_carrier_from_content(content):
     #                       This stops the match at the first newline or punctuation,
     #                       so "DHL EXPRESS DENMARK\nServices" captures only "DENMARK".
     # The trailing strip() in the match handler removes any trailing spaces.
+    # Words that, if they appear as the FIRST word after "DHL Express", indicate
+    # the match is NOT a country name and the whole match should be skipped.
+    # e.g. "DHL Express account manager", "DHL Express Customer Service"
+    # Note: words that appear AFTER the country name (e.g. "Belgium Customer")
+    # are handled by global_country()'s own stop-word stripping.
+    _SKIP_FIRST_WORDS = {
+        'account', 'manager', 'service', 'services', 'contact',
+        'support', 'team', 'representative', 'rep', 'office', 'center', 'centre',
+        'hotline', 'helpdesk', 'help', 'desk', 'portal', 'website', 'web',
+        'time', 'definite', 'rates', 'rate',
+    }
+
     pattern = re.compile(
         r'\bDHL[ \t]+EXPRESS?[ \t]+([A-Za-z][A-Za-z ]{1,39})',
         re.IGNORECASE
     )
 
-    match = pattern.search(content)
-    if match:
-        # Reconstruct the full carrier name from the match
+    # Iterate over ALL matches and return the first one whose first word
+    # is not a stop word (i.e. looks like an actual country name).
+    for match in pattern.finditer(content):
         country_part = match.group(1).strip()
-        # Title-case for consistent formatting: "DHL Express Germany"
+        first_word = country_part.split()[0].lower() if country_part else ''
+        if first_word in _SKIP_FIRST_WORDS:
+            # This match is something like "DHL Express account manager" — skip it
+            continue
+        # Title-case for consistent formatting: "DHL Express Belgium"
         carrier = f"DHL Express {country_part.title()}"
         print(f"[OK] Carrier detected from document text: {carrier!r}")
-        # Show the surrounding text so we can verify the match looks correct
         start = max(0, match.start() - 20)
         end = min(len(content), match.end() + 20)
         snippet = content[start:end].replace('\n', ' ')
