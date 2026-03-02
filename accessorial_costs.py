@@ -58,6 +58,10 @@ def _clean_currency_and_price(raw_price, raw_currency):
     cleaned_price = re.sub(r'\b' + re.escape(currency_code) + r'\b', '', raw_price, flags=re.IGNORECASE)
     cleaned_price = re.sub(r'  +', ' ', cleaned_price).strip()
 
+    # Step 3: normalise decimal separator — replace commas with dots
+    # so values like "0,50" become "0.50"
+    cleaned_price = cleaned_price.replace(',', '.')
+
     return cleaned_price, currency_code
 
 
@@ -318,3 +322,4 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
             print(f"[*] Accessorial Cost Type: file {cost_type_ref_path.name} has no 'Name' column or is empty, Cost Type left blank")
 
     return rows, cost_type_ref_path
+
