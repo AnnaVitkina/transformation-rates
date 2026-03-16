@@ -19,50 +19,99 @@ import difflib
 import re
 from pathlib import Path
 
+# Known currency codes (most popular) — used to detect and strip currency from Cost Price
+CURRENCY_CODES = frozenset({
+    'EUR', 'USD', 'GBP', 'CHF', 'JPY', 'TRY', 'CAD', 'AUD', 'CNY', 'INR',
+    'BRL', 'MXN', 'KRW', 'SGD', 'HKD', 'NOK', 'SEK', 'DKK', 'PLN', 'CZK',
+    'RUB', 'ZAR', 'AED', 'SAR', 'ILS', 'THB', 'IDR', 'MYR', 'PHP', 'RON',
+})
+
 
 def _clean_currency_and_price(raw_price, raw_currency):
     """
-    Separate the currency code from numeric/text noise in both fields.
+    Separate the currency code from numeric/text noise. Currency is detected
+    from the Cost Price cell using a known list of codes, then stripped from
+    the price.
 
     PROBLEM:
     The extracted values often mix numbers and currency codes together, e.g.:
-        CostPrice  = "0.50 EUR met een minimum van 24.00 EUR"
+        CostPrice   = "0.50 EUR met een minimum van 24.00 EUR"
         CostCurrency = "0.50 EUR"
 
     WHAT WE WANT:
-        Currency   = "EUR"          (letters only)
+        Currency   = "EUR"          (letters only, from known list)
         Cost Price = "0.50  met een minimum van 24.00"  (currency code removed)
 
     STEPS:
-    1. Extract the currency code from the raw_currency value — keep only the
-       uppercase letter sequence (e.g. "0.50 EUR" -> "EUR").
-    2. If a currency code was found, remove every occurrence of it from
-       raw_price (case-insensitive) so the price field contains only numbers
-       and descriptive text.
-    3. Collapse any double spaces left behind and strip the result.
+    1. Look in raw_price for any known currency code (from CURRENCY_CODES)
+       as a whole word; use the first match (e.g. "EUR").
+    2. If none found in raw_price, try to extract from raw_currency (e.g. "0.50 EUR" -> "EUR").
+    3. If a currency code was found, remove every occurrence of it from
+       raw_price (case-insensitive).
+    4. Collapse double spaces, normalise decimal separator (comma -> dot), strip.
 
     If no currency code can be extracted, both values are returned unchanged.
     """
     raw_price = str(raw_price or '').strip()
     raw_currency = str(raw_currency or '').strip()
+    currency_code = None
 
-    # Step 1: extract the currency code (3 uppercase letters, e.g. EUR, USD, GBP)
-    currency_match = re.search(r'\b([A-Z]{2,4})\b', raw_currency)
-    if not currency_match:
-        # No recognisable currency code — return as-is
+    # Step 1: find a known currency code in the Cost Price cell (whole word)
+    price_upper = raw_price.upper()
+    for code in sorted(CURRENCY_CODES, key=len, reverse=True):  # longer first (e.g. avoid "IN" matching before "INR")
+        if re.search(r'\b' + re.escape(code) + r'\b', price_upper):
+            currency_code = code
+            break
+
+    # Step 2: fallback — extract from raw_currency (e.g. "0.50 EUR" -> "EUR")
+    if not currency_code:
+        currency_match = re.search(r'\b([A-Z]{2,4})\b', raw_currency)
+        if currency_match:
+            currency_code = currency_match.group(1)
+
+    if not currency_code:
         return raw_price, raw_currency
 
-    currency_code = currency_match.group(1)   # e.g. "EUR"
-
-    # Step 2: remove the currency code from the price string
+    # Step 3: remove the currency code from the price string (all occurrences)
     cleaned_price = re.sub(r'\b' + re.escape(currency_code) + r'\b', '', raw_price, flags=re.IGNORECASE)
     cleaned_price = re.sub(r'  +', ' ', cleaned_price).strip()
 
-    # Step 3: normalise decimal separator — replace commas with dots
-    # so values like "0,50" become "0.50"
+    # Step 4: normalise decimal separator
     cleaned_price = cleaned_price.replace(',', '.')
 
     return cleaned_price, currency_code
+
+
+def _split_minimum_from_cost_price(cost_price_str):
+    """
+    If Cost Price contains a "minimum" phrase (e.g. "0.50 with minimum of 30.00"),
+    split into the base price and the minimum value.
+
+    Supported patterns (case-insensitive):
+      - "X with minimum of Y"  -> Cost Price = X, Minimum = Y
+      - "X minimum of Y"      -> Cost Price = X, Minimum = Y
+      - "X met een minimum van Y" (Dutch) -> Cost Price = X, Minimum = Y
+
+    Returns (cost_price_only, minimum_value) where minimum_value is '' if no match.
+    """
+    s = str(cost_price_str or '').strip()
+    if not s:
+        return s, ''
+
+    # Match "with minimum of 30.00" or "minimum of 30.00" or "met een minimum van 24.00"
+    patterns = [
+        (r'\s+with\s+minimum\s+of\s+([0-9]+(?:\.[0-9]+)?)', 1),
+        (r'\s+minimum\s+of\s+([0-9]+(?:\.[0-9]+)?)', 1),
+        (r'\s+met\s+een\s+minimum\s+van\s+([0-9]+(?:\.[0-9]+)?)', 1),
+    ]
+    for pattern, group in patterns:
+        m = re.search(pattern, s, re.IGNORECASE)
+        if m:
+            minimum_val = m.group(1)
+            cost_only = (s[: m.start()] + s[m.end() :]).strip()
+            cost_only = re.sub(r'  +', ' ', cost_only)
+            return cost_only, minimum_val
+    return s, ''
 
 
 def _load_accessorial_cost_type_names(ref_path):
@@ -237,10 +286,12 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
         raw_price    = item.get('CostPrice') or item.get('CostAmount') or ''
         raw_currency = item.get('CostCurrency', '')
         cost_price, currency = _clean_currency_and_price(raw_price, raw_currency)
+        cost_price, minimum = _split_minimum_from_cost_price(cost_price)
         return {
             'Original Cost Name': item.get('CostName', ''),
             'Cost Type': '',                                    # filled later by fuzzy matching
             'Cost Price': cost_price,
+            'Minimum': minimum,
             'Currency': currency,
             'Rate by': item.get('PriceMechanism', ''),
             'Apply Over': item.get('ApplyTo', ''),
@@ -322,4 +373,3 @@ def build_accessorial_costs_rows(additional_costs_1, additional_costs_2, metadat
             print(f"[*] Accessorial Cost Type: file {cost_type_ref_path.name} has no 'Name' column or is empty, Cost Type left blank")
 
     return rows, cost_type_ref_path
-
