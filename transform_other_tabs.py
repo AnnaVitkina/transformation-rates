@@ -40,10 +40,15 @@ def _transform_rate_name_to_short(rate_name):
     short version of the name plus the zone, e.g. "WW_EXP_ZONE_Zone 1".
 
     TRANSFORMATION RULES (applied in order):
+      Rate names containing "Transit Times" (e.g. "DHL EXPRESS Belgium TD International
+        Export & TD International Import - Transit Times") -> "WW_EXP_IMP_TRANSIT_TIMES"
+        so they do not mix with normal WW_EXP_IMP zones (WORLDWIDE EXPORT/IMPORT).
       "DHL EXPRESS"    -> removed entirely (it's on every name, adds no value)
       "THIRD COUNTRY"  -> "3RD_COUNTRY"
       "WORLDWIDE"      -> "WW"  (same meaning as INTERNATIONAL)
       "INTERNATIONAL"  -> "WW"  (worldwide)
+      "MEDICAL"        -> "MED"
+      "BREAKBULK"      -> "BBX"
       "IMPORT"         -> "IMP"
       "EXPORT"         -> "EXP"
       "ZONING"         -> "ZONE"
@@ -51,23 +56,29 @@ def _transform_rate_name_to_short(rate_name):
     The surviving tokens are then assembled in a fixed order so the result is
     always consistent regardless of the original word order:
       e.g. "DHL EXPRESS WORLDWIDE EXPORT ZONING"      -> "WW_EXP_ZONE"
-      e.g. "DHL EXPRESS INTERNATIONAL EXPORT ZONING"  -> "WW_EXP_ZONE"
-      e.g. "DHL EXPRESS THIRD COUNTRY IMPORT"         -> "3RD_COUNTRY_IMP"
+      e.g. "DHL EXPRESS INTERNATIONAL EXPORT ZONING" -> "WW_EXP_ZONE"
+      e.g. "DHL EXPRESS ... Transit Times"            -> "WW_EXP_IMP_TRANSIT_TIMES"
     """
     if not rate_name or not isinstance(rate_name, str):
         return ''
     s = rate_name.upper().strip()
 
+    # Transit Times services get a distinct prefix so they don't share WW_EXP_IMP_1, etc. with WORLDWIDE EXPORT/IMPORT
+    if 'TRANSIT TIMES' in s:
+        return 'WW_EXP_IMP_TRANSIT_TIMES'
+
     s = s.replace('DHL EXPRESS', ' ')
     s = s.replace('THIRD COUNTRY', ' 3RD_COUNTRY ')
     s = s.replace('WORLDWIDE', ' WW ')       # treat WORLDWIDE same as INTERNATIONAL
     s = s.replace('INTERNATIONAL', ' WW ')
+    s = s.replace('MEDICAL', ' MED ')
+    s = s.replace('BREAKBULK', ' BBX ')
     s = s.replace('IMPORT', ' IMP ')
     s = s.replace('EXPORT', ' EXP ')
     s = s.replace('ZONING', ' ZONE ')
 
     tokens = []
-    for token in ('WW', '3RD_COUNTRY', 'DOMESTIC', 'ECONOMY', 'EXP', 'IMP', 'ZONE'):
+    for token in ('WW', '3RD_COUNTRY', 'DOMESTIC', 'ECONOMY', 'MED', 'BBX', 'EXP', 'IMP', 'ZONE'):
         if token in s and token not in tokens:
             tokens.append(token)
 
@@ -212,6 +223,12 @@ def _country_to_code(country, name_to_code):
     if code is not None:
         return code
 
+    # Attempt 2b: case-insensitive match (file may have "Kosovo", data may have "KOSOVO")
+    s_upper = s.upper()
+    for key, val in name_to_code.items():
+        if key.upper() == s_upper:
+            return val
+
     # Attempt 3: normalised variants
     variants = []
     n = s.replace("Republic Of", "Rep. Of").replace("Republic of", "Rep. Of")
@@ -349,6 +366,17 @@ def build_zone_label_lookup(country_zoning):
         #   -> ["DHL EXPRESS INTERNATIONAL EXPORT ZONING",
         #       "DHL EXPRESS INTERNATIONAL IMPORT ZONING"]
         expanded_names = _expand_combined_rate_name(effective_rate_name)
+
+        # Transit Times block: the first expanded variant is "DHL EXPRESS Belgium TD International
+        # Export" (no "Transit Times"), which would become "WW_EXP" and overwrite (WW_EXP, zone)
+        # used by DHL EXPRESS WORLDWIDE EXPORT. So for this block only register under the
+        # canonical prefix, never under WW_EXP or WW_IMP.
+        is_transit_times = 'TRANSIT TIMES' in (effective_rate_name or '').upper()
+        if is_transit_times and canonical_prefix == 'WW_EXP_IMP_TRANSIT_TIMES':
+            short_prefix = canonical_prefix
+            label = canonical_label or f"{short_prefix}_{zone_number}"
+            lookup[(short_prefix, zone_number)] = label
+            continue   # skip per-variant registration for this block
 
         for name_variant in expanded_names:
             short_prefix = _transform_rate_name_to_short(name_variant)
