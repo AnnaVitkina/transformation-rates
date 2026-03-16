@@ -21,6 +21,15 @@ import re          # used for pattern matching when searching for the carrier na
 from datetime import datetime   # used to record when the extraction was run
 from pathlib import Path        # cross-platform file path handling
 
+# Words that are NOT country names; if they appear after "DHL Express" we skip that match.
+# Used both when validating the structured Carrier field and when scanning raw text.
+CARRIER_SKIP_FIRST_WORDS = {
+    'account', 'manager', 'service', 'services', 'contact',
+    'support', 'team', 'representative', 'rep', 'office', 'center', 'centre',
+    'hotline', 'helpdesk', 'help', 'desk', 'portal', 'website', 'web',
+    'time', 'definite', 'rates', 'rate', 'vereinbarung',
+}
+
 
 def read_converted_json(filepath):
     """
@@ -409,18 +418,9 @@ def detect_carrier_from_content(content):
     #                       This stops the match at the first newline or punctuation,
     #                       so "DHL EXPRESS DENMARK\nServices" captures only "DENMARK".
     # The trailing strip() in the match handler removes any trailing spaces.
-    # Words that, if they appear as the FIRST word after "DHL Express", indicate
-    # the match is NOT a country name and the whole match should be skipped.
-    # e.g. "DHL Express account manager", "DHL Express Customer Service"
-    # Note: words that appear AFTER the country name (e.g. "Belgium Customer")
-    # are handled by global_country()'s own stop-word stripping.
-    _SKIP_FIRST_WORDS = {
-        'account', 'manager', 'service', 'services', 'contact',
-        'support', 'team', 'representative', 'rep', 'office', 'center', 'centre',
-        'hotline', 'helpdesk', 'help', 'desk', 'portal', 'website', 'web',
-        'time', 'definite', 'rates', 'rate',
-    }
-
+    # Use the shared skip list (see CARRIER_SKIP_FIRST_WORDS at top of file).
+    # Words that appear AFTER the country name (e.g. "Belgium Customer") are
+    # handled by global_country()'s own stop-word stripping.
     pattern = re.compile(
         r'\bDHL[ \t]+EXPRESS?[ \t]+([A-Za-z][A-Za-z ]{1,39})',
         re.IGNORECASE
@@ -431,7 +431,7 @@ def detect_carrier_from_content(content):
     for match in pattern.finditer(content):
         country_part = match.group(1).strip()
         first_word = country_part.split()[0].lower() if country_part else ''
-        if first_word in _SKIP_FIRST_WORDS:
+        if first_word in CARRIER_SKIP_FIRST_WORDS:
             # This match is something like "DHL Express account manager" — skip it
             continue
         # Title-case for consistent formatting: "DHL Express Belgium"
@@ -504,14 +504,23 @@ def _carrier_is_valid(carrier_value):
     A carrier value is considered valid if it:
       - is not None or empty
       - contains the word "DHL" (case-insensitive)
-
-    If Azure extracted something that doesn't mention DHL at all (e.g. a stray word
-    picked up from the wrong part of the page), we treat it as invalid and fall back
-    to the text-search approach.
+      - and the part after "DHL Express" is not a skip word (e.g. "Vereinbarung",
+        "account", "manager") — those are not country names, so we reject and fall
+        back to text search to find e.g. "DHL Express Austria".
     """
     if not carrier_value:
         return False
-    return 'dhl' in str(carrier_value).lower()
+    s = str(carrier_value).strip()
+    if 'dhl' not in s.lower():
+        return False
+    # If it looks like "DHL Express <something>", check that <something> is not a skip word
+    m = re.match(r'(?i)dhl\s+express\s+(.+)', s)
+    if m:
+        after = m.group(1).strip()
+        first_word = (after.split()[0] or '').lower()
+        if first_word in CARRIER_SKIP_FIRST_WORDS:
+            return False
+    return True
 
 
 def transform_data(fields, client_name, raw_data=None):
