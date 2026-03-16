@@ -253,18 +253,17 @@ def save_to_excel(data, output_path, accessorial_folder=None):
         wb.save(output_path)
 
         # -----------------------------------------------------------------------
-        # Post-processing: expand MainCosts lanes using AdditionalZoning data.
-        # This adds new rows (one per starred-country sub-zone entry) and new
-        # columns (Origin Country, Destination Country, Origin City,
-        # Destination City, Custom Zone) to the MainCosts tab.
-        # Runs only when AdditionalZoning data is present.
+        # Post-processing: expand MainCosts (carrier country -> ISO, optional AdditionalZoning).
+        # Always run so that Origin/Destination country names (e.g. Switzerland) are
+        # converted to 2-letter codes in Origin Country / Destination Country.
+        # When AdditionalZoning data is present, also adds rows and columns for
+        # starred-country sub-zones (Origin Country, Origin City, etc.).
         # -----------------------------------------------------------------------
-        if data.get('AdditionalZoning'):
-            try:
-                from expand_additional_zoning import expand_main_costs_with_additional_zoning
-                expand_main_costs_with_additional_zoning(output_path)
-            except Exception as e:
-                print(f"[WARN] AdditionalZoning expansion failed (non-fatal): {e}")
+        try:
+            from expand_additional_zoning import expand_main_costs_with_additional_zoning
+            expand_main_costs_with_additional_zoning(output_path)
+        except Exception as e:
+            print(f"[WARN] MainCosts post-processing failed (non-fatal): {e}")
 
         file_size = os.path.getsize(output_path)
         file_size_kb = file_size / 1024
@@ -362,3 +361,7 @@ def main():
 # It does NOT run when this file is imported as a module by another script.
 if __name__ == "__main__":
     main()
+
+
+
+
