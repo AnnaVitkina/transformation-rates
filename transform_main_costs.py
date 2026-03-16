@@ -248,26 +248,33 @@ def parse_zoning_matrix(zoning_matrix):
         matrix_name = (row.get('MatrixName') or '').strip()
         origin_zone = (row.get('OriginZone') or '').strip()
 
+        # Find DestinationZone* keys in this row (may be in same row as MatrixName or in next row)
+        dest_keys = sorted(
+            [k for k in row if re.match(r'^DestinationZone\d+$', k)],
+            key=lambda k: int(re.search(r'\d+', k).group())
+        )
+
         if matrix_name:
             # ---------------------------------------------------------------
             # This is a HEADER ROW – it starts a new matrix block.
             # Example: MatrixName="DHL EXPRESS WW ZONE MATRIX",
             #          DestinationZone1="1", DestinationZone2="2", DestinationZone3="3"
+            # Some PDFs put MatrixName alone in one row; then the next row has the zone columns.
             # ---------------------------------------------------------------
             current_matrix_name = matrix_name
 
-            # Find all keys that look like "DestinationZone1", "DestinationZone2" etc.
-            # and sort them numerically so column order is preserved.
-            dest_keys = sorted(
-                [k for k in row if re.match(r'^DestinationZone\d+$', k)],
-                key=lambda k: int(re.search(r'\d+', k).group())
-            )
-            dest_cols = dest_keys
+            if dest_keys:
+                dest_cols = dest_keys
+                header_dest_nums = [str(row.get(k, '')).strip() for k in dest_cols]
+            # else: keep previous dest_cols/header_dest_nums so data rows can still be parsed
+            continue   # move on to the next row (this header row has no zone letters to add)
 
-            # Read the actual destination zone numbers from the header cells.
-            # e.g. DestinationZone1 -> "1", DestinationZone2 -> "2"
+        if current_matrix_name and dest_keys and not origin_zone:
+            # Row has DestinationZone* but no OriginZone – treat as secondary header (zone column numbers)
+            # so the first matrix is not skipped when its header is split across two rows
+            dest_cols = dest_keys
             header_dest_nums = [str(row.get(k, '')).strip() for k in dest_cols]
-            continue   # move on to the next row (this header row has no prices)
+            continue
 
         if current_matrix_name and origin_zone and dest_cols:
             # ---------------------------------------------------------------
@@ -351,10 +358,25 @@ def _find_matrix_for_service(zoning_lookup, service):
     service = (service or '').strip()
     if not service:
         return None
+    service_upper = service.upper()
     service_words = _main_words(service)
 
     # Get all unique matrix names from the lookup (ignoring the zone letter part of each key)
     matrix_names = {mn for (mn, _) in zoning_lookup}
+
+    # --- Attempt 0: WORLDWIDE THIRD COUNTRY must use the non-Domestic matrix ---
+    # Service "DHL EXPRESS WORLDWIDE THIRD COUNTRY" -> "DHL EXPRESS THIRD COUNTRY ZONE MATRIX"
+    # (not "DHL EXPRESS DOMESTIC THIRD COUNTRY ZONE MATRIX"). Prefer matrix that has THIRD COUNTRY but not DOMESTIC.
+    if 'WORLDWIDE' in service_upper and 'THIRD' in service_upper and 'COUNTRY' in service_upper:
+        for mn in matrix_names:
+            mn_upper = mn.upper()
+            if 'THIRD' in mn_upper and 'COUNTRY' in mn_upper and 'DOMESTIC' not in mn_upper:
+                return mn
+        # Fallback: source data often has only DOMESTIC THIRD COUNTRY ZONE MATRIX; use it for WORLDWIDE so expansion runs
+        for mn in matrix_names:
+            mn_upper = mn.upper()
+            if 'THIRD' in mn_upper and 'COUNTRY' in mn_upper:
+                return mn
 
     # --- Attempt 1: direct substring match ---
     for mn in matrix_names:
@@ -469,11 +491,147 @@ def _format_cost_category(raw_name):
         "Documents up to 2.0 KG"  ->  "Transport cost (Documents up to 2.0 KG)"
         "Envelope up to 300 g"    ->  "Transport cost (Envelope up to 300 g)"
         ""                        ->  ""   (empty stays empty)
+
+    Note: "Adder rate per additional X KG from Y" sections are not formatted
+    as a separate cost; they are merged into the previous category (see
+    _is_adder_section and adder handling in build_matrix_main_costs).
     """
     raw_name = (raw_name or '').strip()
     if not raw_name:
         return raw_name
     return f"Transport cost ({raw_name})"
+
+
+def _is_adder_section(rate_card):
+    """
+    Return True if this rate card is an "adder" table that should be merged
+    into the previous cost category instead of creating a new one.
+
+    Adder tables have cost_category like:
+      "Adder rate per additional 0.5 KG from 10.1 KG"
+      "Adder rate per additional 1 KG from 30.1 KG"
+    and weight values like "10.1\n20" (From/To range).
+    """
+    cost_category = (rate_card.get('cost_category') or '').strip()
+    if not cost_category:
+        return False
+    cost_lower = cost_category.lower()
+    return 'adder rate' in cost_lower and 'additional' in cost_lower
+
+
+def _parse_adder_unit(cost_category_raw):
+    """
+    Extract the unit value from an adder cost category for the "p/X unit" label.
+
+    Examples:
+        "Adder rate per additional 0.5 KG from 10.1 KG"  ->  "0.5"
+        "Adder rate per additional 1 KG from 30.1 KG"    ->  "1"
+    """
+    s = (cost_category_raw or '').strip()
+    # Match "additional" followed by optional spaces and a number (int or decimal)
+    m = re.search(r'additional\s+([0-9]+(?:\.[0-9]+)?)\s*(?:KG|kg|g)?', s, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return '1'
+
+
+def _normalize_adder_weight(weight_str):
+    """
+    Convert adder weight range from extracted form to display form.
+
+    The extracted value is often "10.1\\n20" (From\\nTo). We display as "10.1-20".
+    """
+    if not weight_str:
+        return weight_str
+    s = str(weight_str).strip().replace('\n', '-').replace('\r', '')
+    # Collapse multiple spaces or dashes into one dash
+    s = re.sub(r'[\s\-]+', '-', s).strip('-')
+    return s if s else weight_str
+
+
+def _adder_range_sort_key(range_str):
+    """
+    Sort key for adder weight ranges (e.g. "10.1-20", "70.1-100") so they appear
+    in increasing order by the range start. "10.1-20" < "20.1-30" < "70.1-100".
+    """
+    if not range_str:
+        return (0, 0.0)
+    s = str(range_str).strip()
+    m = re.match(r'^([0-9]+(?:\.[0-9]+)?)', s)
+    if m:
+        try:
+            return (0, float(m.group(1)))
+        except ValueError:
+            pass
+    return (1, s)
+
+
+def _adder_block_sort_key(block):
+    """
+    Sort key for category blocks so that Flat (main) is first, then adder blocks
+    by unit: p/0.5 unit, p/1 unit, p/5 unit (by numeric value).
+    """
+    weight_unit, weights, row4_label = block
+    if row4_label == 'Flat':
+        return (0, 0.0)
+    m = re.search(r'p/([0-9]+(?:\.[0-9]+)?)\s*unit', weight_unit, re.IGNORECASE)
+    if m:
+        try:
+            return (1, float(m.group(1)))
+        except ValueError:
+            pass
+    return (1, 999.0)
+
+
+def _range_start_value(weight_str):
+    """
+    Parse the start (first number) from a range weight like "30.1-70" or "70.1-300".
+    Returns float or None if not a range.
+    """
+    if not weight_str:
+        return None
+    s = str(weight_str).strip()
+    m = re.match(r'^([0-9]+(?:\.[0-9]+)?)\s*[-–]\s*', s)
+    if m:
+        try:
+            return float(m.group(1))
+        except ValueError:
+            pass
+    return None
+
+
+def _trim_flat_weights_before_first_range(category_specs):
+    """
+    For each category: if the first block is Flat and there are adder/range blocks after it,
+    remove flat weight columns that are strictly greater than the first range's start.
+    Example: flat weights [1.0, 2.0, ..., 30.0, 31.0, ..., 100.0], first range "30.1-70"
+    -> keep only [1.0, 2.0, ..., 30.0], then the range columns 30.1-70, 70.1-300, etc.
+    """
+    for _cat_name, blocks in category_specs:
+        if not blocks:
+            continue
+        first_unit, first_weights, first_label = blocks[0]
+        if first_label != 'Flat':
+            continue
+        # Find minimum range start in any subsequent block
+        min_start = None
+        for weight_unit, weights, row4_label in blocks[1:]:
+            for w in weights:
+                start = _range_start_value(w)
+                if start is not None:
+                    if min_start is None or start < min_start:
+                        min_start = start
+        if min_start is None:
+            continue
+        # Keep only flat weights <= min_start (e.g. 30.1 keeps 1.0..30.0, drops 31.0, 32.0, ...)
+        def _keep_flat(w):
+            try:
+                return float(w) <= min_start
+            except (ValueError, TypeError):
+                return True
+        kept = [w for w in first_weights if _keep_flat(w)]
+        if len(kept) < len(first_weights):
+            blocks[0] = (first_unit, kept, first_label)
 
 
 # MainCosts – matrix (lane) view builder
@@ -519,46 +677,126 @@ def build_matrix_main_costs(main_costs, metadata, zoning_matrix=None):
 
     # =======================================================================
     # PASS 1 – Figure out what columns the header needs.
+    # category_specs: list of (cost_cat_name, blocks) where
+    #   blocks = [(weight_unit, weights_list, row4_label), ...]
+    # Normal sections have one block with row4_label "Flat".
+    # Adder sections are merged into the previous category as an extra block
+    # with weight_unit and row4_label like "p/0.5 unit", weights like "10.1-20".
     # =======================================================================
-    category_specs = []   # will hold: [(category_name, weight_unit, [0.5, 1, 2, …]), …]
-    seen_categories = {}  # tracks which categories we have already added (for deduplication)
+    category_specs = []   # (cost_cat_name, [(weight_unit, weights, row4_label), ...])
+    seen_categories = {}  # cost_cat_name -> index in category_specs (for merging same category)
+    # Deduplicate only when the *same* category gets the *same* adder twice (e.g. duplicate in source).
+    seen_adder_per_category = set()
+    # Index of the category that should receive the next adder (the one we most recently processed:
+    # either just appended or just merged into). Using this instead of category_specs[-1] fixes
+    # the bug where adders after a MERGE were attached to the wrong category.
+    last_category_idx = -1
+
+    # Debug: trace which category is "last" when each adder is attached (for weight-bracket column creation)
+    _debug_main_costs = True   # set False to disable debug
 
     for rate_card in main_costs:
-        cost_category = _format_cost_category(rate_card.get('cost_category') or '')
-        weight_unit = rate_card.get('weight_unit') or 'KG'
+        cost_category_raw = rate_card.get('cost_category') or ''
+        service_type = (rate_card.get('service_type') or '').strip()
         pricing = rate_card.get('pricing', [])
 
+        if _is_adder_section(rate_card):
+            if not category_specs or last_category_idx < 0:
+                if _debug_main_costs:
+                    print(f"[DEBUG MainCosts] ADDER skipped (no category yet): service={service_type!r} cost={cost_category_raw!r}")
+                continue
+            prev_name = category_specs[last_category_idx][0]
+            unit = _parse_adder_unit(cost_category_raw)
+            rate_by = f"p/{unit} unit"
+            weights_adder = []
+            for pe in pricing:
+                w = pe.get('weight', '')
+                if w:
+                    weights_adder.append(_normalize_adder_weight(w))
+            weights_adder_sorted = sorted(weights_adder, key=_adder_range_sort_key)
+            sig = (prev_name, rate_by, tuple(weights_adder_sorted))
+            if sig in seen_adder_per_category:
+                if _debug_main_costs:
+                    print(f"[DEBUG MainCosts] ADDER skipped (duplicate): service={service_type!r} attach_to={prev_name!r} rate_by={rate_by!r} weights={weights_adder_sorted}")
+                continue
+            seen_adder_per_category.add(sig)
+            prev_blocks = category_specs[last_category_idx][1]
+            prev_blocks.append((rate_by, weights_adder_sorted, rate_by))
+            if _debug_main_costs:
+                print(f"[DEBUG MainCosts] ADDER attached: service={service_type!r} cost_raw={cost_category_raw!r} -> ATTACH_TO( last processed category )={prev_name!r} rate_by={rate_by!r} weights={weights_adder_sorted}")
+            continue
+
+        # Normal section
+        cost_category = _format_cost_category(cost_category_raw)
+        weight_unit = rate_card.get('weight_unit') or 'KG'
         weights_set = set()
         for pe in pricing:
             w = pe.get('weight', '')
             if w:
                 weights_set.add(w)
-
         weights_sorted = sorted(weights_set, key=_weight_sort_key)
+        block = (weight_unit, weights_sorted, 'Flat')
 
         if cost_category not in seen_categories:
-            seen_categories[cost_category] = (weight_unit, weights_sorted)
-            category_specs.append((cost_category, weight_unit, weights_sorted))
+            seen_categories[cost_category] = len(category_specs)
+            category_specs.append((cost_category, [block]))
+            last_category_idx = len(category_specs) - 1
+            if _debug_main_costs:
+                print(f"[DEBUG MainCosts] NEW category (now last): service={service_type!r} cost_raw={cost_category_raw!r} -> category={cost_category!r} (flat weights count={len(weights_sorted)})")
         else:
-            existing_unit, existing_weights = seen_categories[cost_category]
+            idx = seen_categories[cost_category]
+            _, blocks = category_specs[idx]
+            # Merge weights into the first (only) block of this category
+            existing_unit, existing_weights, row4 = blocks[0]
             merged = set(existing_weights) | set(weights_sorted)
             merged_sorted = sorted(merged, key=_weight_sort_key)
-            seen_categories[cost_category] = (existing_unit, merged_sorted)
-            for i, spec in enumerate(category_specs):
-                if spec[0] == cost_category:
-                    category_specs[i] = (cost_category, existing_unit, merged_sorted)
-                    break
+            blocks[0] = (existing_unit, merged_sorted, row4)
+            last_category_idx = idx  # next adder should attach to this category (the one we just merged into)
+            if _debug_main_costs:
+                print(f"[DEBUG MainCosts] MERGE into existing: service={service_type!r} cost_raw={cost_category_raw!r} -> category={cost_category!r} (last_category_idx now {last_category_idx} = this category)")
+
+    if _debug_main_costs:
+        print("[DEBUG MainCosts] --- PASS 1 summary: categories and their blocks (order = column order in Excel) ---")
+        for i, (cat_name, blocks) in enumerate(category_specs):
+            block_labels = []
+            for b in blocks:
+                unit, weights, row4 = b
+                if row4 == 'Flat':
+                    block_labels.append(f"Flat({len(weights)} weights)")
+                else:
+                    block_labels.append(f"{row4}({weights})")
+            print(f"  [{i}] {cat_name!r} -> blocks: {block_labels}")
+
+    # Sort blocks within each category: Flat first, then adder blocks by unit (p/0.5, p/1, p/5)
+    # and within each adder block weights are already sorted by _adder_range_sort_key
+    for _cat_name, blocks in category_specs:
+        blocks.sort(key=_adder_block_sort_key)
+
+    # Trim flat weight columns: keep only <= first range start (e.g. keep <= 30.0, drop 31+ when first range is 30.1-70)
+    _trim_flat_weights_before_first_range(category_specs)
 
     # =======================================================================
     # PASS 2 – Build one row per lane (service + zone combination).
     # =======================================================================
     lane_rows = {}   # (service_type, zone_name) -> row dict
+    prev_cost_category = None   # for merging adder sections into previous category
 
     for rate_card in main_costs:
         service_type = (rate_card.get('service_type') or '').strip()
-        cost_category = _format_cost_category(rate_card.get('cost_category') or '')
+        cost_category_raw = rate_card.get('cost_category') or ''
         zone_headers = rate_card.get('zone_headers', {})
         pricing = rate_card.get('pricing', [])
+
+        if _is_adder_section(rate_card):
+            if prev_cost_category is None:
+                continue
+            # Attach to the immediately previous category (Documents vs Non-documents etc.)
+            cost_category = prev_cost_category
+            _key_weight = lambda w: _normalize_adder_weight(w)
+        else:
+            cost_category = _format_cost_category(cost_category_raw)
+            prev_cost_category = cost_category
+            _key_weight = lambda w: w
 
         service_lower = service_type.lower()
         is_import = 'import' in service_lower
@@ -593,7 +831,7 @@ def build_matrix_main_costs(main_costs, metadata, zoning_matrix=None):
 
             row = lane_rows[key]
             for weight, price in weight_prices.items():
-                row[(cost_category, weight)] = price
+                row[(cost_category, _key_weight(weight))] = price
 
     # Get the carrier's country name (e.g. "Netherlands") — used to fill Origin/Destination
     # for domestic and non-zoned lanes where the carrier country is the implicit value.
@@ -713,34 +951,56 @@ def expand_main_costs_lanes_by_zoning(matrix_rows, zoning_matrix):
     # Build the full (matrix_name, zone_letter) -> [(origin, dest), ...] lookup
     zoning_lookup = parse_zoning_matrix(zoning_matrix)
     if not zoning_lookup:
+        print("[DEBUG] expand_matrix_zones: zoning_lookup is empty; no expansion")
         return matrix_rows
 
+    matrix_names_in_lookup = sorted({k[0] for k in zoning_lookup})
+    print(f"[DEBUG] expand_matrix_zones: lookup has {len(zoning_lookup)} keys; matrix names: {matrix_names_in_lookup}")
+
     expanded = []
+    debug_logged = set()   # (reason, service_snippet) to avoid repeating same message
 
     for row in matrix_rows:
         matrix_zone = (row.get('Matrix zone') or '').strip()
         service = (row.get('Service') or '').strip()
 
         if not matrix_zone:
-            # No letter zone: copy through unchanged
             expanded.append(row)
             continue
 
         zone_letter = _matrix_zone_to_letter(matrix_zone)
         if not zone_letter:
+            key = ("zone_letter_empty", service[:50])
+            if key not in debug_logged:
+                debug_logged.add(key)
+                print(f"[DEBUG] expand_matrix_zones: SKIP zone_letter empty  service={service!r}  matrix_zone={matrix_zone!r} -> letter={zone_letter!r}")
             expanded.append(row)
             continue
 
         matrix_name = _find_matrix_for_service(zoning_lookup, service)
         if not matrix_name:
+            key = ("no_matrix_name", service[:50])
+            if key not in debug_logged:
+                debug_logged.add(key)
+                print(f"[DEBUG] expand_matrix_zones: SKIP no matrix for service  service={service!r}  matrix_zone={matrix_zone!r}  zone_letter={zone_letter!r}")
             expanded.append(row)
             continue
 
         key = (matrix_name, zone_letter)
         pairs = zoning_lookup.get(key, [])
         if not pairs:
+            key_dbg = ("no_pairs", matrix_name, zone_letter)
+            if key_dbg not in debug_logged:
+                debug_logged.add(key_dbg)
+                available_letters = sorted({k[1] for k in zoning_lookup if k[0] == matrix_name})
+                print(f"[DEBUG] expand_matrix_zones: SKIP no pairs  service={service!r}  matrix_name={matrix_name!r}  zone_letter={zone_letter!r}  available_letters_for_this_matrix={available_letters}")
             expanded.append(row)
             continue
+
+        key_ok = ("expanded", matrix_name, zone_letter)
+        if key_ok not in debug_logged:
+            debug_logged.add(key_ok)
+            print(f"[DEBUG] expand_matrix_zones: OK  service={service[:45]!r}  matrix_name={matrix_name!r}  zone_letter={zone_letter!r}  -> {len(pairs)} pair(s)")
 
         # Create one copy of the row per (origin, destination) pair
         for origin_zone, dest_zone in pairs:
