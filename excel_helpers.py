@@ -18,6 +18,34 @@ import re
 from pathlib import Path
 
 
+def _range_weight_to_leq_display(weight_str):
+    """
+    Convert a range weight header to "<= Y" format for display.
+    Dot is decimal separator, comma is thousands separator.
+    Examples: "30.1-70" -> "<= 70", "300.1 - 99,999" -> "<= 99999" (no dot on whole numbers).
+    """
+    if not weight_str:
+        return weight_str
+    s = str(weight_str).strip()
+    parts = re.split(r'[-–\s]+', s)
+    if len(parts) < 2:
+        return weight_str
+    # First part is start (e.g. 30.1), rest is end; "99" + "995" -> 99995
+    end_str = ''.join(parts[1:])
+    # Comma = thousands separator: remove commas. Dot = decimal (unchanged).
+    # So "99,999" -> 99999, "99,999.0" -> 99999.0 -> display "<= 99999" (no dot for whole)
+    try:
+        end_val = float(end_str.replace(',', ''))
+        if end_val != end_val:  # NaN
+            return weight_str
+        # Whole numbers: show without dot (99999 not 99999.0)
+        if end_val == int(end_val):
+            return f"<= {int(end_val)}"
+        return f"<= {end_val}"
+    except ValueError:
+        return weight_str
+
+
 # This list defines the exact columns and their order for the Accessorial Costs sheet.
 # It is defined here as a constant so both the row-builder (in accessorial_costs.py)
 # and the sheet-writer below use the same column order without having to pass it around.
@@ -25,6 +53,7 @@ ACCESSORIAL_COSTS_COLUMNS = [
     'Original Cost Name',          # the cost name as it appears in the rate card PDF
     'Cost Type',                   # standardised type name (filled by fuzzy matching)
     'Cost Price',                  # the numeric price value
+    'Minimum',                     # extracted from "X with minimum of Y" in Cost Price
     'Currency',                    # e.g. EUR, USD
     'Rate by',                     # how the price is applied (e.g. per shipment, per kg)
     'Apply Over',                  # what the cost applies to (e.g. base freight)
@@ -81,83 +110,92 @@ def write_matrix_sheet(workbook, sheet_name, matrix_rows, category_specs, metada
         cell.alignment = header_alignment
     col = num_fixed + 1   # move the column pointer past the fixed columns
 
-    # --- Build the cost category column groups (Rows 1, 2, and 3) ---
-    # For each cost category (e.g. "Documents"), we create a block of columns:
-    #   - 1 extra column at the start of the block (for the "Weight measure - KG" label)
-    #   - Then one column per weight breakpoint (0.5, 1, 2 …)
-    category_start_cols = []   # stores position info for each category group
+    # --- Build the cost category column groups (Rows 1–4) ---
+    # category_specs: list of (cost_cat_name, blocks) where
+    #   blocks = [(weight_unit, weights, row4_label), ...]
+    # One category can have multiple blocks (e.g. main weights + adder columns).
+    category_start_cols = []   # (start_col, end_col, cost_cat_name, weights) per block for data write
 
-    for cost_cat_name, weight_unit, weights in category_specs:
-        start_col = col   # remember where this category group starts
+    for cost_cat_name, blocks in category_specs:
+        cat_start_col = col   # first column of this whole category (for Row 1 merge)
 
-        # Row 2, first column of this group: write "Rate by: Weight measure - KG"
-        # The "Rate by:" prefix is a fixed label; the rest is the extracted weight unit comment.
-        _base_label = f"Weight measure - {weight_unit}" if weight_unit else "Weight measure"
-        weight_measure_label = f"Rate by: {_base_label}"
-        ws.cell(row=2, column=col, value=weight_measure_label)
-        ws.cell(row=2, column=col).fill = header_fill
-        ws.cell(row=2, column=col).font = header_font
-        ws.cell(row=2, column=col).alignment = header_alignment
-        col += 1
+        for weight_unit, weights, row4_label in blocks:
+            is_adder = (row4_label != 'Flat')
+            start_col = col
 
-        # Row 2, remaining columns in this group: empty but styled (just the blue background)
-        for _ in weights:
-            ws.cell(row=2, column=col, value='')
-            ws.cell(row=2, column=col).fill = header_fill
-            col += 1
+            if is_adder:
+                # Adder block: no spacer column, no "Rate by: p/X unit" label (user requested).
+                for w_idx, w in enumerate(weights):
+                    c = start_col + w_idx
+                    ws.cell(row=2, column=c, value='')
+                    ws.cell(row=2, column=c).fill = header_fill
+                    ws.cell(row=2, column=c).font = header_font
+                    ws.cell(row=2, column=c).alignment = header_alignment
+                    # Row 3: show range as "<= Y" (e.g. 30.1-70 -> <= 70, 300.1-99-995 -> <= 99995)
+                    ws.cell(row=3, column=c, value=_range_weight_to_leq_display(w))
+                    ws.cell(row=3, column=c).fill = header_fill
+                    ws.cell(row=3, column=c).font = header_font
+                    ws.cell(row=3, column=c).alignment = header_alignment
+                    # Row 4: "p/X unit" (no "Currency")
+                    ws.cell(row=4, column=c, value=row4_label)
+                    ws.cell(row=4, column=c).fill = header_fill
+                    ws.cell(row=4, column=c).font = header_font
+                    ws.cell(row=4, column=c).alignment = header_alignment
+                col = start_col + len(weights)
+            else:
+                # Normal block: spacer with "Rate by: Weight measure - KG", then weight columns
+                _base_label = f"Weight measure - {weight_unit}" if weight_unit else "Weight measure"
+                weight_measure_label = f"Rate by: {_base_label}"
+                ws.cell(row=2, column=col, value=weight_measure_label)
+                ws.cell(row=2, column=col).fill = header_fill
+                ws.cell(row=2, column=col).font = header_font
+                ws.cell(row=2, column=col).alignment = header_alignment
+                col += 1
+                for _ in weights:
+                    ws.cell(row=2, column=col, value='')
+                    ws.cell(row=2, column=col).fill = header_fill
+                    col += 1
+                ws.cell(row=3, column=start_col, value='')
+                ws.cell(row=3, column=start_col).fill = header_fill
+                col = start_col + 1
+                for w in weights:
+                    ws.cell(row=3, column=col, value=f"<= {w}")
+                    ws.cell(row=3, column=col).fill = header_fill
+                    ws.cell(row=3, column=col).font = header_font
+                    ws.cell(row=3, column=col).alignment = header_alignment
+                    col += 1
+                end_col = col - 1
+                # Row 4: spacer "Currency", then "Flat" under each weight
+                ws.cell(row=4, column=start_col, value='Currency')
+                ws.cell(row=4, column=start_col).fill = header_fill
+                ws.cell(row=4, column=start_col).font = header_font
+                ws.cell(row=4, column=start_col).alignment = header_alignment
+                for w_idx in range(len(weights)):
+                    c = start_col + 1 + w_idx
+                    ws.cell(row=4, column=c, value=row4_label)
+                    ws.cell(row=4, column=c).fill = header_fill
+                    ws.cell(row=4, column=c).font = header_font
+                    ws.cell(row=4, column=c).alignment = header_alignment
 
-        # Row 3, first column of this group: empty (aligns with the "Weight measure" label above)
-        ws.cell(row=3, column=start_col, value='')
-        ws.cell(row=3, column=start_col).fill = header_fill
-        col = start_col + 1
+            end_col = col - 1
+            category_start_cols.append((start_col, end_col, cost_cat_name, weights, not is_adder))
 
-        # Row 3, remaining columns: write each weight breakpoint value (e.g. "<= 0.5", "<= 1", "<= 2")
-        for w in weights:
-            ws.cell(row=3, column=col, value=f"<= {w}")
-            ws.cell(row=3, column=col).fill = header_fill
-            ws.cell(row=3, column=col).font = header_font
-            ws.cell(row=3, column=col).alignment = header_alignment
-            col += 1
-
-        end_col = col - 1   # last column of this category group
-
-        # Save the position info so we can write data rows correctly later
-        category_start_cols.append((start_col, end_col, cost_cat_name, weight_unit, weights))
-
-        # Row 1: merge all columns in this group into one cell and write the category name
-        # e.g. "Documents" spans columns 6 to 10
-        if start_col <= end_col:
-            ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=end_col)
-            cell = ws.cell(row=1, column=start_col, value=cost_cat_name)
+        cat_end_col = col - 1
+        # Row 1: merge all columns for this category (all blocks) and write category name once
+        if cat_start_col <= cat_end_col:
+            ws.merge_cells(start_row=1, start_column=cat_start_col, end_row=1, end_column=cat_end_col)
+            cell = ws.cell(row=1, column=cat_start_col, value=cost_cat_name)
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = header_alignment
 
-    total_cols = col - 1   # total number of columns in the sheet
+    total_cols = col - 1
 
     # Rows 2, 3 and 4 under the five fixed columns: empty cells with the blue header fill
-    # (so the header band looks continuous across the full width)
     for r in (2, 3, 4):
         for c in range(1, num_fixed + 1):
             ws.cell(row=r, column=c, value='')
             ws.cell(row=r, column=c).fill = header_fill
-
-    # Row 4 for each cost category group:
-    #   - spacer column (first col of the group, below "Rate by: Weight measure - KG"): "Currency"
-    #   - each weight column (below the weight breakpoint values): "Flat"
-    for start_col, end_col, cost_cat_name, weight_unit, weights in category_start_cols:
-        # Spacer column → "Currency" (sits directly below "Rate by: Weight measure - KG")
-        cell = ws.cell(row=4, column=start_col, value='Currency')
-        cell.fill = header_fill
-        cell.font = header_font
-        cell.alignment = header_alignment
-        # Weight columns → "Flat" (sits directly below each weight breakpoint value)
-        for w_idx, _ in enumerate(weights):
-            c = start_col + 1 + w_idx
-            cell = ws.cell(row=4, column=c, value='Flat')
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = header_alignment
 
     # --- Write the data rows starting at row 5 (shifted down by one for the new Currency row) ---
     for row_idx, row_data in enumerate(matrix_rows, 5):
@@ -173,20 +211,15 @@ def write_matrix_sheet(workbook, sheet_name, matrix_rows, category_specs, metada
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
             col += 1
 
-        # Write the price columns for each cost category group.
-        # The first column of each group is a spacer (empty).
-        # The remaining columns each hold the price for one weight breakpoint.
-        # The price is looked up from the row dict using the composite key (category, weight).
-        for start_col, end_col, cost_cat_name, weight_unit, weights in category_start_cols:
-            # First column of the group: spacer (empty)
-            cell = ws.cell(row=row_idx, column=start_col, value='')
-            cell.alignment = Alignment(horizontal="center")
-            col = start_col + 1
-
-            # One column per weight: look up the price and write it
+        # Write the price columns for each block (adder blocks have no spacer column).
+        for start_col, end_col, cost_cat_name, weights, has_spacer in category_start_cols:
+            col = start_col
+            if has_spacer:
+                cell = ws.cell(row=row_idx, column=col, value='')
+                cell.alignment = Alignment(horizontal="center")
+                col = start_col + 1
             for w in weights:
-                key = (cost_cat_name, w)   # e.g. ("Documents", "0.5")
-                val = row_data.get(key, '')   # e.g. 10.50, or '' if no price for this weight
+                val = row_data.get((cost_cat_name, w), '')
                 cell = ws.cell(row=row_idx, column=col, value=val)
                 cell.alignment = Alignment(horizontal="center")
                 col += 1
