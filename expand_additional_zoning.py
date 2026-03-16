@@ -73,19 +73,46 @@ def _read_main_costs_headers(ws):
 
 
 # ---------------------------------------------------------------------------
+# Normalization helpers (for matching zone labels and country keys across tabs)
+# ---------------------------------------------------------------------------
+
+def _normalize_zone_label(rate_name):
+    """
+    Normalize zone label so MainCosts (e.g. "WW_EXP_ZONE_2") matches CountryZoning
+    (e.g. "WW_EXP_ZONE_Zone 2"). Replaces "_Zone N" or " Zone N" at end with "_N".
+    """
+    if not rate_name:
+        return rate_name
+    s = str(rate_name).strip()
+    m = re.search(r'^(.+?)(?:_Zone| Zone)\s*(\d+|\w)\s*$', s, re.IGNORECASE)
+    if m:
+        return f"{m.group(1).rstrip('_')}_{m.group(2)}"
+    return s
+
+
+def _normalize_country_key(s):
+    """
+    Normalize country string for matching (e.g. "France (FR) *1" and "FRANCE (FR)*1"
+    both become "FRANCE(FR)*1" by removing all spaces).
+    """
+    if not s:
+        return ''
+    return re.sub(r'\s+', '', str(s).strip().upper())
+
+
+# ---------------------------------------------------------------------------
 # Build lookups from CountryZoning and AdditionalZoning
 # ---------------------------------------------------------------------------
 
 def _build_additional_zoning_lookup(additional_zoning_rows):
     """
-    Build a lookup: starred_country_key -> [additional_info, ...]
-    preserving occurrence order.
-
-    e.g. "GROOT BRIT. (GB) *1" -> ["LONDONDERRY (LDY), BELFAST (BFS)", ...]
+    Build a lookup: normalized_country_key -> [(country_display, additional_info), ...]
+    preserving occurrence order. Uses normalized keys so "France (FR) *1" and
+    "FRANCE (FR)*1" match.
 
     Rows with no Country but with AdditionalInfo are attached to the last seen Country.
     """
-    lookup = defaultdict(list)   # key -> list of AdditionalInfo strings (in order)
+    lookup = defaultdict(list)
     last_country = None
 
     for row in additional_zoning_rows:
@@ -94,12 +121,14 @@ def _build_additional_zoning_lookup(additional_zoning_rows):
 
         if country and '*' in country:
             last_country = country
-            # If this row also has AdditionalInfo, store it immediately
-            if info:
-                lookup[country].append(info)
+            norm_key = _normalize_country_key(country)
+            if norm_key:
+                lookup[norm_key].append((country, info))
         elif not country and info and last_country:
-            # Continuation row: attach info to the last starred country
-            lookup[last_country].append(info)
+            norm_key = _normalize_country_key(last_country)
+            if norm_key and lookup[norm_key]:
+                last_display = lookup[norm_key][-1][0]
+                lookup[norm_key].append((last_display, info))
 
     return lookup
 
@@ -136,44 +165,83 @@ def _is_zone_label(value):
     return bool(re.search(r'_ZONE_\w+$', s))
 
 
+def _build_zones_with_only_starred_countries(country_zoning_rows):
+    """
+    From CountryZoning rows, build the set of zone labels where every country in that zone has *.
+    If a zone contains ONLY starred countries, we will not add the base row in MainCosts
+    (only the expanded rows from additional zoning).
+    """
+    zone_to_all_countries = defaultdict(list)
+    last_rate_name = ''
+    for row in country_zoning_rows:
+        rate_name = (row.get('RateName') or '').strip()
+        country = (row.get('Country') or '').strip()
+        if rate_name:
+            last_rate_name = rate_name
+        if not country:
+            continue
+        zone_label = _normalize_zone_label(last_rate_name) if last_rate_name else ''
+        if zone_label:
+            zone_to_all_countries[zone_label].append(country)
+    only_starred = set()
+    for zl, countries in zone_to_all_countries.items():
+        if countries and all('*' in str(c) for c in countries):
+            only_starred.add(zl)
+    return only_starred
+
+
 def _build_zone_to_countries(cz_lookup, az_lookup):
     """
     Build a mapping: zone_label -> [(country_display, additional_info), ...]
 
-    For each starred country in CountryZoning, match its Nth occurrence with
-    the Nth occurrence in AdditionalZoning (by the same country key).
-
-    Returns dict: { "WW_EXP_IMP_ZONE_3": [("GROOT BRIT. (GB) *1", "LONDONDERRY..."), ...] }
+    Uses normalized country keys so CountryZoning and AdditionalZoning match
+    (e.g. "France (FR) *1" vs "FRANCE (FR)*1"). Uses _normalize_zone_label so
+    "WW_EXP_ZONE_Zone 2" and "WW_EXP_ZONE_2" both resolve. Registers under both
+    normalized and raw rate_name for robust lookup.
     """
     zone_to_countries = defaultdict(list)
 
     for country_key, cz_entries in cz_lookup.items():
-        az_entries = az_lookup.get(country_key, [])
+        norm_country = _normalize_country_key(country_key)
+        az_entries = az_lookup.get(norm_country, [])
 
         for idx, (rate_name, zone) in enumerate(cz_entries):
-            # Match Nth CountryZoning entry with Nth AdditionalZoning entry
-            info = az_entries[idx] if idx < len(az_entries) else ''
-            zone_to_countries[rate_name].append((country_key, info))
+            if idx < len(az_entries):
+                country_display, info = az_entries[idx]
+            else:
+                country_display, info = country_key, ''
+            norm_zone = _normalize_zone_label(rate_name)
+            zone_to_countries[norm_zone].append((country_display, info))
+            if rate_name and rate_name != norm_zone:
+                zone_to_countries[rate_name].append((country_display, info))
 
     return zone_to_countries
 
 
-def expand_rows(main_costs_data_rows, zone_to_countries):
+def expand_rows(main_costs_data_rows, zone_to_countries, carrier_country_code='', only_starred_zones=None):
     """
     For each MainCosts data row where Origin or Destination is a zone label,
     generate additional expanded rows — one per (country, city) pair for that zone.
 
-    The original row is kept unchanged.
+    If only_starred_zones is set and the zone contains ONLY starred countries (from additional zoning),
+    the base row is not added — only the expanded rows are added (additional zoning will cover it).
     New columns added to expanded rows:
         Origin Country, Destination Country, Origin City, Destination City, Custom Zone
 
-    Parameters:
-        main_costs_data_rows – list of dicts (one per data row, keyed by column index)
-        zone_to_countries    – dict from _build_zone_to_countries()
+    Export lane: Origin = carrier, Destination = zone → when we expand destination,
+    we fill Destination Country/City; the other side (Origin) is carrier → set Origin Country = carrier_country_code.
+    Import lane: Origin = zone, Destination = carrier → when we expand origin,
+    we fill Origin Country/City; the other side (Destination) is carrier → set Destination Country = carrier_country_code.
 
+    Parameters:
+        main_costs_data_rows   – list of dicts (one per data row, keyed by column index)
+        zone_to_countries      – dict from _build_zone_to_countries()
+        carrier_country_code   – ISO code for the carrier's country (e.g. 'DE'); used to fill
+                                 the non-expanded side (Origin Country for export, Destination Country for import).
     Returns list of row dicts with the new columns populated where applicable.
     """
     result = []
+    only_starred_zones = only_starred_zones or set()
 
     for row in main_costs_data_rows:
         origin = str(row.get('Origin') or '').strip()
@@ -182,17 +250,7 @@ def expand_rows(main_costs_data_rows, zone_to_countries):
         origin_is_zone = _is_zone_label(origin)
         dest_is_zone = _is_zone_label(destination)
 
-        # Always keep the original row; only initialise new columns if not already set
-        # (preserves Origin Country / Destination Country filled by the carrier code step)
-        base_row = dict(row)
-        base_row.setdefault('Origin Country', '')
-        base_row.setdefault('Destination Country', '')
-        base_row.setdefault('Origin City', '')
-        base_row.setdefault('Destination City', '')
-        base_row.setdefault('Custom Zone', '')
-        result.append(base_row)
-
-        # Determine which zone label to expand
+        # Determine which zone label to expand (if any)
         if origin_is_zone:
             zone_label = origin
             expand_field = 'origin'
@@ -200,28 +258,50 @@ def expand_rows(main_costs_data_rows, zone_to_countries):
             zone_label = destination
             expand_field = 'destination'
         else:
-            continue   # no zone to expand
+            zone_label = None
+            expand_field = None
 
-        entries = zone_to_countries.get(zone_label, [])
+        # Look up using normalized label first (e.g. WW_EXP_ZONE_2), then raw
+        entries = []
+        if zone_label:
+            entries = zone_to_countries.get(_normalize_zone_label(zone_label)) or zone_to_countries.get(zone_label, [])
+
+        # If this zone contains ONLY starred countries, skip the base row (additional zoning rows will be added only)
+        norm_zone = _normalize_zone_label(zone_label) if zone_label else ''
+        skip_base_row = zone_label and norm_zone in only_starred_zones and entries
+
+        if not skip_base_row:
+            base_row = dict(row)
+            base_row.setdefault('Origin Country', '')
+            base_row.setdefault('Destination Country', '')
+            base_row.setdefault('Origin City', '')
+            base_row.setdefault('Destination City', '')
+            base_row.setdefault('Custom Zone', '')
+            result.append(base_row)
+
         if not entries:
             continue
 
         for country_display, city_info in entries:
             new_row = dict(row)
+            for k in ('Origin Country', 'Destination Country', 'Origin City', 'Destination City', 'Custom Zone'):
+                new_row.setdefault(k, '')
             new_row['Custom Zone'] = zone_label
 
             if expand_field == 'origin':
+                # Import lane: we expanded origin (zone). Fill origin side; other side (destination) is carrier.
                 new_row['Origin'] = ''
                 new_row['Origin Country'] = country_display
                 new_row['Origin City'] = city_info
-                new_row['Destination Country'] = ''
                 new_row['Destination City'] = ''
+                new_row['Destination Country'] = carrier_country_code or ''
             else:
+                # Export lane: we expanded destination (zone). Fill destination side; other side (origin) is carrier.
                 new_row['Destination'] = ''
                 new_row['Destination Country'] = country_display
                 new_row['Destination City'] = city_info
-                new_row['Origin Country'] = ''
                 new_row['Origin City'] = ''
+                new_row['Origin Country'] = carrier_country_code or ''
 
             result.append(new_row)
 
@@ -249,25 +329,31 @@ def expand_main_costs_with_additional_zoning(xlsx_path, output_path=None):
     print(f"[*] expand_additional_zoning: reading {xlsx_path.name}")
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)
 
-    # Check required sheets exist
-    for sh in ('MainCosts', 'CountryZoning', 'AdditionalZoning'):
-        if sh not in wb.sheetnames:
-            print(f"[WARN] expand_additional_zoning: sheet '{sh}' not found, skipping expansion")
-            return str(output_path)
+    # MainCosts is required; CountryZoning and AdditionalZoning are optional
+    if 'MainCosts' not in wb.sheetnames:
+        print(f"[WARN] expand_additional_zoning: sheet 'MainCosts' not found, skipping")
+        return str(output_path)
 
-    # --- Read CountryZoning and AdditionalZoning ---
-    _, cz_rows = _read_sheet_as_dicts(wb['CountryZoning'])
-    _, az_rows = _read_sheet_as_dicts(wb['AdditionalZoning'])
+    # --- Read CountryZoning and AdditionalZoning (optional) ---
+    cz_rows = []
+    az_rows = []
+    if 'CountryZoning' in wb.sheetnames:
+        _, cz_rows = _read_sheet_as_dicts(wb['CountryZoning'])
+    if 'AdditionalZoning' in wb.sheetnames:
+        _, az_rows = _read_sheet_as_dicts(wb['AdditionalZoning'])
 
     az_lookup = _build_additional_zoning_lookup(az_rows)
     cz_lookup = _build_country_zoning_lookup(cz_rows)
     zone_to_countries = _build_zone_to_countries(cz_lookup, az_lookup)
+    only_starred_zones = _build_zones_with_only_starred_countries(cz_rows)
 
-    if not zone_to_countries:
-        print("[*] expand_additional_zoning: no starred-country zone mappings found, nothing to expand")
-        return str(output_path)
-
-    print(f"[*] expand_additional_zoning: found {len(zone_to_countries)} zone labels to expand")
+    if zone_to_countries:
+        zone_keys = list(zone_to_countries.keys())
+        print(f"[*] expand_additional_zoning: found {len(zone_keys)} zone labels to expand: {zone_keys[:20]}{'...' if len(zone_keys) > 20 else ''}")
+        for zk in zone_keys[:8]:
+            print(f"    '{zk}' -> {len(zone_to_countries[zk])} country/entries")
+    else:
+        print("[*] expand_additional_zoning: no starred-country zone mappings; applying carrier country code only")
 
     # --- Read MainCosts ---
     ws_mc = wb['MainCosts']
@@ -308,6 +394,15 @@ def expand_main_costs_with_additional_zoning(xlsx_path, output_path=None):
 
     data_dicts = [row_to_dict(r) for r in data_rows_raw]
 
+    # Debug: sample MainCosts rows with zone labels
+    zone_label_rows = [d for d in data_dicts if _is_zone_label(str(d.get('Origin') or '')) or _is_zone_label(str(d.get('Destination') or ''))]
+    if zone_label_rows:
+        print(f"[*] expand_additional_zoning: MainCosts has {len(data_dicts)} rows; {len(zone_label_rows)} rows have a zone label in Origin/Destination")
+        origins = list({str(d.get('Origin') or '') for d in zone_label_rows[:12]})
+        dests = list({str(d.get('Destination') or '') for d in zone_label_rows[:12]})
+        print(f"    Sample Origin values: {origins[:8]}")
+        print(f"    Sample Destination values: {dests[:8]}")
+
     # --- Resolve carrier country name -> ISO code from Metadata tab ---
     # For every row where Origin or Destination was filled by global_country()
     # (i.e. equals the carrier country name), copy the ISO code into
@@ -344,10 +439,16 @@ def expand_main_costs_with_additional_zoning(xlsx_path, output_path=None):
                 d['Destination Country'] = carrier_country_code
                 d['Destination'] = ''
 
-    expanded_dicts = expand_rows(data_dicts, zone_to_countries)
+    expanded_dicts = expand_rows(data_dicts, zone_to_countries, carrier_country_code, only_starred_zones)
 
     added = len(expanded_dicts) - len(data_dicts)
     print(f"[*] expand_additional_zoning: {len(data_dicts)} original rows -> {len(expanded_dicts)} rows (+{added} expanded)")
+
+    # Debug: sample expanded rows' Origin/Destination Country
+    if added > 0:
+        expanded_only = [d for d in expanded_dicts if d.get('Custom Zone')]
+        for d in expanded_only[:6]:
+            print(f"    Origin Country='{d.get('Origin Country', '')}'  Destination Country='{d.get('Destination Country', '')}'  Custom Zone='{d.get('Custom Zone', '')}'")
 
     # --- Replace starred country display strings with ISO codes ---
     # Values written by expand_rows into Origin Country / Destination Country come from
@@ -379,6 +480,8 @@ def expand_main_costs_with_additional_zoning(xlsx_path, output_path=None):
         return s   # leave unchanged if nothing matched
 
     for d in expanded_dicts:
+        for fc in OUT_FIXED:
+            d.setdefault(fc, '')
         if d.get('Origin Country'):
             d['Origin Country'] = _starred_to_code(d['Origin Country'])
         if d.get('Destination Country'):
@@ -425,15 +528,18 @@ def expand_main_costs_with_additional_zoning(xlsx_path, output_path=None):
             cell.alignment = header_align
 
     # --- Write data rows starting at row 5 ---
+    def _cell_val(val):
+        return str(val) if val is not None and val != '' else ''
+
     for row_idx, d in enumerate(expanded_dicts, 5):
         col = 1
         # New fixed column order
         for fc in OUT_FIXED:
-            ws_new.cell(row=row_idx, column=col, value=d.get(fc, ''))
+            ws_new.cell(row=row_idx, column=col, value=_cell_val(d.get(fc, '')))
             col += 1
         # Price columns (keyed by original 0-based index, starting at len(ORIG_FIXED))
         for orig_idx in range(len(ORIG_FIXED), col_count):
-            ws_new.cell(row=row_idx, column=col, value=d.get(orig_idx, ''))
+            ws_new.cell(row=row_idx, column=col, value=_cell_val(d.get(orig_idx, '')))
             col += 1
 
     # Freeze panes and auto-filter
@@ -444,3 +550,5 @@ def expand_main_costs_with_additional_zoning(xlsx_path, output_path=None):
     wb.save(output_path)
     print(f"[OK] expand_additional_zoning: saved to {output_path.name}")
     return str(output_path)
+
+
