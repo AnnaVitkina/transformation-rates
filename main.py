@@ -553,6 +553,7 @@ def transform_data(fields, client_name, raw_data=None):
       AdditionalZoning  – list of additional zoning rows
       ZoningMatrix      – list of zone matrix rows
       AdditionalCostsPart2 – list of additional cost rows (second part)
+      GoGreenPlusCost   – optional GoGreen Plus surcharge rows (Origin/Destination lists)
       statistics        – row counts for each section (used for reporting)
     """
     print("[*] Transforming data...")
@@ -602,7 +603,8 @@ def transform_data(fields, client_name, raw_data=None):
         'CountryZoning': [],
         'AdditionalZoning': [],
         'ZoningMatrix': [],
-        'AdditionalCostsPart2': []
+        'AdditionalCostsPart2': [],
+        'GoGreenPlusCost': [],
     }
 
     # MainCosts has special processing (header rows + data rows) so it gets its own function
@@ -616,7 +618,7 @@ def transform_data(fields, client_name, raw_data=None):
 
     # All other array fields are processed the same way: extract each row as a flat dict
     field_names = ['AddedRates', 'AdditionalCostsPart1', 'CountryZoning',
-                   'AdditionalZoning', 'ZoningMatrix', 'AdditionalCostsPart2']
+                   'AdditionalZoning', 'ZoningMatrix', 'AdditionalCostsPart2', 'GoGreenPlusCost']
 
     for field_name in field_names:
         field = fields.get(field_name)
@@ -638,7 +640,8 @@ def transform_data(fields, client_name, raw_data=None):
         'CountryZoning_rows': len(output['CountryZoning']),
         'AdditionalZoning_rows': len(output['AdditionalZoning']),
         'ZoningMatrix_rows': len(output['ZoningMatrix']),
-        'AdditionalCostsPart2_rows': len(output['AdditionalCostsPart2'])
+        'AdditionalCostsPart2_rows': len(output['AdditionalCostsPart2']),
+        'GoGreenPlusCost_rows': len(output['GoGreenPlusCost']),
     }
 
     print(f"[OK] Transformation complete")
@@ -650,6 +653,7 @@ def transform_data(fields, client_name, raw_data=None):
     print(f"  - AdditionalZoning: {output['statistics']['AdditionalZoning_rows']} rows")
     print(f"  - ZoningMatrix: {output['statistics']['ZoningMatrix_rows']} rows")
     print(f"  - AdditionalCostsPart2: {output['statistics']['AdditionalCostsPart2_rows']} rows")
+    print(f"  - GoGreenPlusCost: {output['statistics']['GoGreenPlusCost_rows']} rows")
 
     return output
 
@@ -987,6 +991,7 @@ def main():
         print(f"  - AdditionalZoning: {processed_data['statistics']['AdditionalZoning_rows']} rows")
         print(f"  - ZoningMatrix: {processed_data['statistics']['ZoningMatrix_rows']} rows")
         print(f"  - AdditionalCostsPart2: {processed_data['statistics']['AdditionalCostsPart2_rows']} rows")
+        print(f"  - GoGreenPlusCost: {processed_data['statistics']['GoGreenPlusCost_rows']} rows")
         print()
         print("[DEBUG] Extraction summary:")
         print(f"  - Input: {input_file}")
