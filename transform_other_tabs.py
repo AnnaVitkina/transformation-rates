@@ -6,10 +6,12 @@ This module handles the data preparation for:
   - CountryZoning tab (flatten_array_data with country-code enrichment)
   - AdditionalZoning, ZoningMatrix, AdditionalCostsPart1, AdditionalCostsPart2
     (flatten_array_data – generic flat pass-through)
+  - GoGreenPlusCost (flatten_array_data – countries → codes; other text unchanged)
 
 Public functions:
   flatten_array_data   – converts a JSON array into flat rows, with special handling
                          for CountryZoning (forward-fill RateName + add Country Code)
+                         and GoGreenPlusCost (countries → ISO codes; non-country segments unchanged)
   pivot_added_rates    – untangles the interleaved header/data rows in AddedRates
 
 Private helpers:
@@ -18,6 +20,8 @@ Private helpers:
   _load_country_codes
   _country_to_code
   _fill_country_zoning_country_codes
+  _gogreen_country_list_to_codes
+  _apply_gogreen_plus_cost_country_codes
   _is_added_rates_header_row
 """
 
@@ -271,6 +275,76 @@ def _country_to_code(country, name_to_code):
     return ''
 
 
+# ---------------------------------------------------------------------------
+# GoGreenPlusCost: Origin / Destination country lists → DHL codes
+# ---------------------------------------------------------------------------
+
+def _gogreen_segment_to_code(segment, name_to_code):
+    """
+    Turn one comma-separated segment into a single ISO-style code using dhl_country_codes.txt.
+
+    Expected segment shapes:
+      - "ES - Spain"   (code - name): prefer lookup by country name (right side), else left if 2 letters
+      - "Spain"        (name only): _country_to_code
+      - "ES"           (code only): if 2 letters, return as-is
+    """
+    s = (segment or '').strip()
+    if not s:
+        return ''
+
+    if ' - ' in s:
+        left, right = s.split(' - ', 1)
+        left, right = left.strip(), right.strip()
+        code = _country_to_code(right, name_to_code)
+        if code:
+            return code
+        if len(left) == 2 and left.isalpha():
+            return left.upper()
+        code = _country_to_code(left, name_to_code)
+        if code:
+            return code
+        return ''
+
+    if len(s) == 2 and s.isalpha():
+        return s.upper()
+
+    return _country_to_code(s, name_to_code) or ''
+
+
+def _gogreen_country_list_to_codes(text, name_to_code):
+    """
+    Convert a comma-separated list like "ES - Spain, IT - Italy" into "ES, IT"
+    using lookups from dhl_country_codes.txt (via _country_to_code).
+
+    Segments that do not resolve to a code (e.g. "All other", "All other countries")
+    are left exactly as in the source (trimmed), not dropped or altered.
+    """
+    if not text or not isinstance(text, str):
+        return text
+    parts = []
+    for segment in text.split(','):
+        raw = segment.strip()
+        if not raw:
+            continue
+        code = _gogreen_segment_to_code(segment, name_to_code)
+        if code:
+            parts.append(code)
+        else:
+            parts.append(raw)
+    return ', '.join(parts)
+
+
+def _apply_gogreen_plus_cost_country_codes(rows, name_to_code):
+    """Origin/Destination: country segments → DHL codes; non-country text (e.g. All other) unchanged."""
+    for row in rows:
+        for key in list(row.keys()):
+            if key.lower() not in ('origin', 'destination'):
+                continue
+            val = row.get(key)
+            if isinstance(val, str) and val.strip():
+                row[key] = _gogreen_country_list_to_codes(val, name_to_code)
+
+
 def _fill_country_zoning_country_codes(rows, name_to_code):
     """
     Add a 'Country Code' column to every CountryZoning row by looking up
@@ -488,6 +562,11 @@ def flatten_array_data(array_data, metadata, field_name):
       1. Forward-fill empty RateName cells (see _fill_country_zoning_rate_names)
       2. Add a Country Code column by looking up each country name (see _fill_country_zoning_country_codes)
 
+    SPECIAL HANDLING FOR GoGreenPlusCost:
+    Origin and Destination may hold comma-separated entries like "ES - Spain, IT - Italy".
+    Recognised countries become ISO codes (e.g. "ES, IT") via dhl_country_codes.txt.
+    Segments that are not countries (e.g. "All other", "All other countries") are kept as-is.
+
     All other arrays (AdditionalZoning, ZoningMatrix, etc.) are passed through as-is
     with just the three identity columns prepended.
     """
@@ -510,6 +589,9 @@ def flatten_array_data(array_data, metadata, field_name):
         _fill_country_zoning_rate_names(rows)
         name_to_code = _load_country_codes()
         _fill_country_zoning_country_codes(rows, name_to_code)
+    elif field_name == 'GoGreenPlusCost':
+        name_to_code = _load_country_codes()
+        _apply_gogreen_plus_cost_country_codes(rows, name_to_code)
 
     return rows
 
