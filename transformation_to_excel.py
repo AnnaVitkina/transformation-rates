@@ -131,9 +131,10 @@ def save_to_excel(data, output_path, accessorial_folder=None):
       4  AdditionalCostsPart1  – first batch of extra charges from the rate card
       5  CountryZoning         – which countries belong to which zone (with ISO codes added)
       6  AdditionalZoning      – additional zoning rules (if present)
-      7  ZoningMatrix          – the raw origin/destination zone matrix (for reference)
-      8  AdditionalCostsPart2  – second batch of extra charges from the rate card
-      9  Accessorial Costs     – combined view of Part1 + Part2 with standardised Cost Types
+      7  GoGreenPlusCost       – GoGreen Plus rows; Origin/Destination lists → DHL codes
+      8  ZoningMatrix          – the raw origin/destination zone matrix (for reference)
+      9  AdditionalCostsPart2  – second batch of extra charges from the rate card
+      10 Accessorial Costs     – combined view of Part1 + Part2 with standardised Cost Types
 
     PARAMETERS:
       data               – the full JSON dictionary loaded from extracted_data.json
@@ -221,7 +222,16 @@ def save_to_excel(data, output_path, accessorial_folder=None):
             write_sheet(wb, "AdditionalZoning", additional_zoning_rows, metadata)
 
         # -----------------------------------------------------------------------
-        # Tab 7: ZoningMatrix
+        # Tab 7: GoGreenPlusCost
+        # Origin/Destination: comma-separated "CODE - Name" lists → codes via dhl_country_codes.txt
+        # -----------------------------------------------------------------------
+        gogreen_plus = data.get('GoGreenPlusCost', [])
+        if gogreen_plus:
+            gogreen_rows = flatten_array_data(gogreen_plus, metadata, 'GoGreenPlusCost')
+            write_sheet(wb, "GoGreenPlusCost", gogreen_rows, metadata)
+
+        # -----------------------------------------------------------------------
+        # Tab 8: ZoningMatrix
         # -----------------------------------------------------------------------
         zoning_matrix = data.get('ZoningMatrix', [])
         if zoning_matrix:
@@ -229,7 +239,7 @@ def save_to_excel(data, output_path, accessorial_folder=None):
             write_sheet(wb, "ZoningMatrix", zoning_matrix_rows, metadata)
 
         # -----------------------------------------------------------------------
-        # Tab 8: AdditionalCostsPart2
+        # Tab 9: AdditionalCostsPart2
         # -----------------------------------------------------------------------
         additional_costs_2 = data.get('AdditionalCostsPart2', [])
         if additional_costs_2:
@@ -237,7 +247,7 @@ def save_to_excel(data, output_path, accessorial_folder=None):
             write_sheet(wb, "AdditionalCostsPart2", additional_costs_2_rows, metadata)
 
         # -----------------------------------------------------------------------
-        # Tab 9: Accessorial Costs
+        # Tab 10: Accessorial Costs
         # Combines Part1 and Part2 into one clean table with standardised Cost Types.
         # -----------------------------------------------------------------------
         accessorial_rows, accessorial_file_used = build_accessorial_costs_rows(
