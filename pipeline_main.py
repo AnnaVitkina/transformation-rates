@@ -688,8 +688,8 @@ def run_pipeline(
     _shutil.copy2(str(output_xlsx_path), str(processing_xlsx_path))
     print(f"[*] Full workbook copied to processing: {processing_xlsx_path}")
 
-    # Rewrite the output xlsx keeping only the four required tabs
-    KEEP_TABS = ["Metadata", "MainCosts", "CountryZoning", "AdditionalZoning", "Accessorial Costs"]
+    # Rewrite the output xlsx keeping only the required tabs
+    KEEP_TABS = ["Metadata", "MainCosts", "CountryZoning", "AdditionalZoning", "GoGreenPlusCost", "Accessorial Costs"]
     try:
         _wb = _openpyxl.load_workbook(str(output_xlsx_path))
         tabs_to_remove = [s for s in _wb.sheetnames if s not in KEEP_TABS]
